@@ -2,12 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strconv"
 	"strings"
@@ -20,31 +21,35 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"go.uber.org/zap"
 
 	"github.com/ldbl/sre/backend/pkg/config"
+	"github.com/ldbl/sre/backend/pkg/configwatch"
 	"github.com/ldbl/sre/backend/pkg/telemetry"
 )
 
 // Server represents the HTTP API.
 type Server struct {
-	cfg       config.Config
-	router    chi.Router
-	logger    *log.Logger
-	registry  *prometheus.Registry
-	requests  *prometheus.CounterVec
-	duration  *prometheus.HistogramVec
-	inFlight  prometheus.Gauge
-	ready     atomic.Bool
-	live      atomic.Bool
-	randSrc   *rand.Rand
-	randMu    sync.Mutex
-	indexTmpl *template.Template
+	cfg           config.Config
+	router        chi.Router
+	logger        *otelzap.Logger
+	registry      *prometheus.Registry
+	requests      *prometheus.CounterVec
+	duration      *prometheus.HistogramVec
+	inFlight      prometheus.Gauge
+	ready         atomic.Bool
+	live          atomic.Bool
+	randSrc       *rand.Rand
+	randMu        sync.Mutex
+	indexTmpl     *template.Template
+	configWatcher *configwatch.Watcher
 }
 
 // New constructs a fully configured HTTP server.
-func New(cfg config.Config, logger *log.Logger) *Server {
+func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	if logger == nil {
-		logger = log.New(os.Stdout, "", log.LstdFlags)
+		logger = otelzap.New(zap.NewExample())
 	}
 
 	s := &Server{
@@ -90,6 +95,21 @@ func New(cfg config.Config, logger *log.Logger) *Server {
 	tmpl := template.Must(template.New("index").Parse(indexTemplate))
 	s.indexTmpl = tmpl
 
+	// Initialize config watcher if config path is set
+	if cfg.ConfigPath != "" {
+		watcher, err := configwatch.NewWatcher(cfg.ConfigPath, logger)
+		if err != nil {
+			logger.Warn("failed to initialize config watcher", zap.Error(err), zap.String("path", cfg.ConfigPath))
+		} else {
+			s.configWatcher = watcher
+			// Register callback for config changes
+			watcher.OnChange(func(key, value string) {
+				logger.Info("config changed", zap.String("key", key), zap.String("value", value))
+			})
+			watcher.Watch()
+		}
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -115,9 +135,27 @@ func New(cfg config.Config, logger *log.Logger) *Server {
 	r.Get("/status/{code}", s.handleStatus)
 	r.Get("/delay/{seconds}", s.handleDelay)
 	r.Get("/panic", s.handlePanic)
+	r.Get("/error", s.handleError)
+	r.Get("/error/{level}", s.handleError)
 	r.Get("/metrics", s.handleMetrics)
 	r.Get("/openapi", s.handleOpenAPI)
 	r.Get("/swagger", s.handleSwagger)
+	r.Get("/configs", s.handleConfigs)
+	r.Post("/token", s.handleTokenGenerate)
+	r.Get("/token/validate", s.handleTokenValidate)
+
+	// pprof endpoints for profiling
+	r.HandleFunc("/debug/pprof/", pprof.Index)
+	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	r.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	r.Handle("/debug/pprof/block", pprof.Handler("block"))
+	r.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	r.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
 
 	s.router = r
 	return s
@@ -169,7 +207,20 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r)
-		s.logger.Printf("%s %s status=%d duration=%s", r.Method, r.URL.Path, recorder.status, time.Since(start))
+
+		// Skip logging for health checks to reduce noise
+		switch r.URL.Path {
+		case "/healthz", "/livez", "/readyz", "/metrics":
+			return
+		}
+
+		// Use context for trace correlation
+		s.logger.Ctx(r.Context()).Info("request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", recorder.status),
+			zap.Duration("duration", time.Since(start)),
+		)
 	})
 }
 
@@ -330,10 +381,68 @@ func (s *Server) handleDelay(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		s.logger.Println("/panic invoked, terminating process with exit code 255")
+		s.logger.Ctx(r.Context()).Warn("/panic invoked, terminating process with exit code 255")
 		os.Exit(255)
 	}()
 	respondJSON(w, http.StatusOK, map[string]string{"status": "terminating"})
+}
+
+// handleError generates log entries at different levels for testing
+// GET /error - generates error level log
+// GET /error/{level} - generates log at specified level (debug, info, warn, error)
+func (s *Server) handleError(w http.ResponseWriter, r *http.Request) {
+	level := chi.URLParam(r, "level")
+	if level == "" {
+		level = "error"
+	}
+
+	testErr := errors.New("test error for observability verification")
+	ctx := r.Context()
+
+	switch level {
+	case "debug":
+		s.logger.Ctx(ctx).Debug("debug level test message",
+			zap.String("endpoint", "/error/debug"),
+			zap.String("request_id", middleware.GetReqID(ctx)),
+		)
+		respondJSON(w, http.StatusOK, map[string]string{
+			"level":   "debug",
+			"message": "debug log generated",
+		})
+	case "info":
+		s.logger.Ctx(ctx).Info("info level test message",
+			zap.String("endpoint", "/error/info"),
+			zap.String("request_id", middleware.GetReqID(ctx)),
+		)
+		respondJSON(w, http.StatusOK, map[string]string{
+			"level":   "info",
+			"message": "info log generated",
+		})
+	case "warn":
+		s.logger.Ctx(ctx).Warn("warning level test message",
+			zap.String("endpoint", "/error/warn"),
+			zap.String("request_id", middleware.GetReqID(ctx)),
+		)
+		respondJSON(w, http.StatusOK, map[string]string{
+			"level":   "warn",
+			"message": "warning log generated",
+		})
+	case "error":
+		// Record error in span for tracing
+		telemetry.RecordError(ctx, testErr)
+		s.logger.Ctx(ctx).Error("error level test message",
+			zap.Error(testErr),
+			zap.String("endpoint", "/error/error"),
+			zap.String("request_id", middleware.GetReqID(ctx)),
+		)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{
+			"level":   "error",
+			"message": "error log generated",
+			"error":   testErr.Error(),
+		})
+	default:
+		http.Error(w, "invalid level: use debug, info, warn, or error", http.StatusBadRequest)
+	}
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -347,6 +456,22 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSwagger(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(swaggerTemplate))
+}
+
+// handleConfigs returns the watched config values from ConfigMaps/Secrets
+func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
+	if s.configWatcher == nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+			"message": "config watcher not configured (set CONFIG_PATH env var)",
+		})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"path":    s.cfg.ConfigPath,
+		"configs": s.configWatcher.GetAll(),
+	})
 }
 
 func (s *Server) openAPISpec() map[string]any {
@@ -526,7 +651,7 @@ func (s *Server) Serve() error {
 		Addr:    s.cfg.Addr(),
 		Handler: s.router,
 	}
-	s.logger.Printf("listening on %s", s.cfg.Addr())
+	s.logger.Info("listening", zap.String("addr", s.cfg.Addr()))
 	return srv.ListenAndServe()
 }
 
