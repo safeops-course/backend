@@ -97,9 +97,17 @@ jobs:
         run: |
           VERSION="${{ steps.tags.outputs.version }}"
 
-          # Check if release already exists
+          # Check if release exists and its status
           if gh release view "$VERSION" &>/dev/null; then
-            echo "Release $VERSION already exists, skipping..."
+            IS_DRAFT=$(gh release view "$VERSION" --json isDraft -q '.isDraft')
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              echo "Draft release $VERSION exists, publishing it..."
+              gh release edit "$VERSION" --draft=false --latest
+              # Update with generated notes
+              gh release edit "$VERSION" --notes "$(gh api repos/${{ github.repository }}/releases/generate-notes -f tag_name="$VERSION" -q '.body')"
+            else
+              echo "Release $VERSION already published, skipping..."
+            fi
           else
             echo "Creating release $VERSION..."
             gh release create "$VERSION" \
