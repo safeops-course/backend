@@ -124,11 +124,9 @@ jobs:
           if git rev-parse "$NEXT_VERSION" &>/dev/null; then
             echo "Tag $NEXT_VERSION already exists, skipping..."
           else
-            echo "Creating draft release $NEXT_VERSION..."
-            gh release create "$NEXT_VERSION" \
-              --title "Next Release $NEXT_VERSION" \
-              --notes "Development release - changelog will be generated on promotion" \
-              --draft
+            echo "Creating git tag $NEXT_VERSION..."
+            git tag "$NEXT_VERSION"
+            git push origin "$NEXT_VERSION"
           fi
 
       - name: Summary
