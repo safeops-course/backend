@@ -15,6 +15,26 @@ import (
 	"github.com/ldbl/sre/backend/pkg/telemetry"
 )
 
+// @title           SRE Control Plane Backend API
+// @version         1.0
+// @description     Podinfo-inspired Go microservice for Kubernetes demos. Exposes health probes, chaos endpoints, metrics, and observability features.
+// @termsOfService  http://swagger.io/terms/
+
+// @contact.name   LDBL Team
+// @contact.url    https://github.com/ldbl/backend
+
+// @license.name  MIT
+// @license.url   https://opensource.org/licenses/MIT
+
+// @host      localhost:8080
+// @BasePath  /
+// @schemes   http https
+
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Type "Bearer" followed by a space and JWT token
+
 func main() {
 	ctx := context.Background()
 

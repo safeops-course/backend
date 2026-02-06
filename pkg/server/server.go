@@ -21,12 +21,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
 	"github.com/ldbl/sre/backend/pkg/config"
 	"github.com/ldbl/sre/backend/pkg/configwatch"
 	"github.com/ldbl/sre/backend/pkg/telemetry"
+
+	_ "github.com/ldbl/sre/backend/pkg/api/docs" // swagger docs
 )
 
 // Server represents the HTTP API.
@@ -139,7 +142,9 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	r.Get("/error/{level}", s.handleError)
 	r.Get("/metrics", s.handleMetrics)
 	r.Get("/openapi", s.handleOpenAPI)
-	r.Get("/swagger", s.handleSwagger)
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 	r.Get("/configs", s.handleConfigs)
 	r.Post("/token", s.handleTokenGenerate)
 	r.Get("/token/validate", s.handleTokenValidate)
@@ -259,6 +264,13 @@ func (s *Server) randomFloat() float64 {
 	return s.randSrc.Float64()
 }
 
+// handleIndex godoc
+// @Summary      Landing page
+// @Description  Returns HTML landing page with service information
+// @Tags         General
+// @Produce      html
+// @Success      200  {string}  string  "HTML page"
+// @Router       / [get]
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	data := map[string]string{
 		"Message":     s.cfg.UIMessage,
@@ -272,10 +284,25 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_ = s.indexTmpl.Execute(w, data)
 }
 
+// handleHealth godoc
+// @Summary      Health check
+// @Description  Returns service health status
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Router       /healthz [get]
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleReady godoc
+// @Summary      Readiness probe
+// @Description  Returns readiness status for Kubernetes
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Failure      503  {object}  StatusResponse
+// @Router       /readyz [get]
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if !s.ready.Load() {
 		respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready"})
@@ -284,16 +311,38 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
+// handleReadyEnable godoc
+// @Summary      Enable readiness
+// @Description  Sets the service as ready
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Router       /readyz/enable [put]
 func (s *Server) handleReadyEnable(w http.ResponseWriter, r *http.Request) {
 	s.ready.Store(true)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
+// handleReadyDisable godoc
+// @Summary      Disable readiness
+// @Description  Sets the service as not ready (for graceful shutdown testing)
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Router       /readyz/disable [put]
 func (s *Server) handleReadyDisable(w http.ResponseWriter, r *http.Request) {
 	s.ready.Store(false)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "paused"})
 }
 
+// handleLive godoc
+// @Summary      Liveness probe
+// @Description  Returns liveness status for Kubernetes
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Failure      503  {object}  StatusResponse
+// @Router       /livez [get]
 func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	if !s.live.Load() {
 		respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not live"})
@@ -302,16 +351,37 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "live"})
 }
 
+// handleLiveEnable godoc
+// @Summary      Enable liveness
+// @Description  Sets the service as live
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Router       /livez/enable [put]
 func (s *Server) handleLiveEnable(w http.ResponseWriter, r *http.Request) {
 	s.live.Store(true)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "live"})
 }
 
+// handleLiveDisable godoc
+// @Summary      Disable liveness
+// @Description  Sets the service as not live (triggers container restart)
+// @Tags         Health
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Router       /livez/disable [put]
 func (s *Server) handleLiveDisable(w http.ResponseWriter, r *http.Request) {
 	s.live.Store(false)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "paused"})
 }
 
+// handleVersion godoc
+// @Summary      Version info
+// @Description  Returns service version, commit, and build information
+// @Tags         General
+// @Produce      json
+// @Success      200  {object}  VersionResponse
+// @Router       /version [get]
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{
 		"version":      s.cfg.Version,
@@ -321,6 +391,13 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleEnv godoc
+// @Summary      Environment variables
+// @Description  Returns all environment variables (use with caution in production)
+// @Tags         Debug
+// @Produce      json
+// @Success      200  {object}  map[string]string
+// @Router       /env [get]
 func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 	env := make(map[string]string)
 	for _, kv := range os.Environ() {
@@ -332,6 +409,13 @@ func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, env)
 }
 
+// handleHeaders godoc
+// @Summary      Request headers
+// @Description  Returns all HTTP request headers
+// @Tags         Debug
+// @Produce      json
+// @Success      200  {object}  map[string]string
+// @Router       /headers [get]
 func (s *Server) handleHeaders(w http.ResponseWriter, r *http.Request) {
 	headers := make(map[string]string)
 	for key, vals := range r.Header {
@@ -340,6 +424,17 @@ func (s *Server) handleHeaders(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, headers)
 }
 
+// handleEcho godoc
+// @Summary      Echo request body
+// @Description  Returns the request body as-is
+// @Tags         Debug
+// @Accept       json
+// @Produce      json
+// @Param        body  body  string  false  "Request body to echo"
+// @Success      200  {string}  string  "Echoed body"
+// @Success      204  "Empty body"
+// @Failure      400  {string}  string  "Bad request"
+// @Router       /echo [post]
 func (s *Server) handleEcho(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -356,6 +451,15 @@ func (s *Server) handleEcho(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
+// handleStatus godoc
+// @Summary      Return specific HTTP status
+// @Description  Returns the specified HTTP status code (for testing)
+// @Tags         Chaos
+// @Produce      plain
+// @Param        code  path  int  true  "HTTP status code (100-599)"
+// @Success      200  {string}  string  "Status message"
+// @Failure      400  {string}  string  "Invalid status code"
+// @Router       /status/{code} [get]
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	codeParam := chi.URLParam(r, "code")
 	code, err := strconv.Atoi(codeParam)
@@ -367,6 +471,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(fmt.Sprintf("status forced to %d\n", code)))
 }
 
+// handleDelay godoc
+// @Summary      Delay response
+// @Description  Delays the response by the specified number of seconds
+// @Tags         Chaos
+// @Produce      json
+// @Param        seconds  path  number  true  "Delay in seconds"
+// @Success      200  {object}  DelayResponse
+// @Failure      400  {string}  string  "Invalid delay"
+// @Router       /delay/{seconds} [get]
 func (s *Server) handleDelay(w http.ResponseWriter, r *http.Request) {
 	secondsParam := chi.URLParam(r, "seconds")
 	delaySeconds, err := strconv.ParseFloat(secondsParam, 64)
@@ -378,6 +491,13 @@ func (s *Server) handleDelay(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"delay": secondsParam})
 }
 
+// handlePanic godoc
+// @Summary      Terminate process
+// @Description  Terminates the process with exit code 255 (for testing pod restarts)
+// @Tags         Chaos
+// @Produce      json
+// @Success      200  {object}  StatusResponse
+// @Router       /panic [get]
 func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		time.Sleep(10 * time.Millisecond)
@@ -387,9 +507,17 @@ func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "terminating"})
 }
 
-// handleError generates log entries at different levels for testing
-// GET /error - generates error level log
-// GET /error/{level} - generates log at specified level (debug, info, warn, error)
+// handleError godoc
+// @Summary      Generate test logs
+// @Description  Generates log entries at different levels for testing observability
+// @Tags         Observability
+// @Produce      json
+// @Param        level  path  string  false  "Log level: debug, info, warn, error"  default(error)
+// @Success      200  {object}  ErrorResponse
+// @Success      500  {object}  ErrorResponse  "Error level generates 500"
+// @Failure      400  {string}  string  "Invalid level"
+// @Router       /error [get]
+// @Router       /error/{level} [get]
 func (s *Server) handleError(w http.ResponseWriter, r *http.Request) {
 	level := chi.URLParam(r, "level")
 	if level == "" {
@@ -445,20 +573,35 @@ func (s *Server) handleError(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleMetrics godoc
+// @Summary      Prometheus metrics
+// @Description  Returns Prometheus metrics in text exposition format
+// @Tags         Observability
+// @Produce      plain
+// @Success      200  {string}  string  "Prometheus metrics"
+// @Router       /metrics [get]
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
 }
 
+// handleOpenAPI godoc
+// @Summary      OpenAPI specification
+// @Description  Returns OpenAPI 3.0 specification in JSON format
+// @Tags         Documentation
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Router       /openapi [get]
 func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, s.openAPISpec())
 }
 
-func (s *Server) handleSwagger(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(swaggerTemplate))
-}
-
-// handleConfigs returns the watched config values from ConfigMaps/Secrets
+// handleConfigs godoc
+// @Summary      Config watcher values
+// @Description  Returns values from watched ConfigMaps/Secrets
+// @Tags         Config
+// @Produce      json
+// @Success      200  {object}  ConfigsResponse
+// @Router       /configs [get]
 func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 	if s.configWatcher == nil {
 		respondJSON(w, http.StatusOK, map[string]any{
@@ -824,30 +967,3 @@ const indexTemplate = `<!DOCTYPE html>
 </body>
 </html>`
 
-const swaggerTemplate = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SRE Control Plane API</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css" />
-  <style>
-    body { margin: 0; background-color: #0f172a; }
-    #swagger-ui { max-width: 960px; margin: 0 auto; padding: 24px; background: #ffffff; }
-  </style>
-</head>
-<body>
-  <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
-  <script>
-    window.onload = function () {
-      SwaggerUIBundle({
-        url: '/openapi',
-        dom_id: '#swagger-ui',
-        presets: [SwaggerUIBundle.presets.apis],
-        layout: 'BaseLayout'
-      });
-    };
-  </script>
-</body>
-</html>`

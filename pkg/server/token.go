@@ -30,8 +30,17 @@ type jwtCustomClaims struct {
 	jwt.RegisteredClaims
 }
 
-// handleTokenGenerate creates a JWT token
-// POST /token - body contains the username
+// handleTokenGenerate godoc
+// @Summary      Generate JWT token
+// @Description  Creates a JWT token valid for 5 minutes
+// @Tags         Auth
+// @Accept       plain
+// @Produce      json
+// @Param        body  body  string  false  "Username (defaults to 'anonymous')"
+// @Success      200  {object}  TokenResponse
+// @Failure      400  {string}  string  "Bad request"
+// @Failure      500  {string}  string  "Internal error"
+// @Router       /token [post]
 func (s *Server) handleTokenGenerate(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -76,8 +85,15 @@ func (s *Server) handleTokenGenerate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTokenValidate validates a JWT token from Authorization header
-// GET /token/validate - requires Authorization: Bearer <token>
+// handleTokenValidate godoc
+// @Summary      Validate JWT token
+// @Description  Validates a JWT token from the Authorization header
+// @Tags         Auth
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  TokenValidationResponse
+// @Failure      401  {string}  string  "Unauthorized"
+// @Router       /token/validate [get]
 func (s *Server) handleTokenValidate(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
