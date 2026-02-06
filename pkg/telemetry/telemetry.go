@@ -9,10 +9,20 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
+
+// Metrics holds OpenTelemetry metric instruments
+type Metrics struct {
+	RequestCounter  metric.Int64Counter
+	ErrorCounter    metric.Int64Counter
+	RequestDuration metric.Float64Histogram
+}
+
+var metrics *Metrics
 
 // Init initializes OpenTelemetry with Uptrace Cloud
 func Init(ctx context.Context) func() {
@@ -42,11 +52,78 @@ func Init(ctx context.Context) func() {
 		log.Printf("OpenTelemetry initialized: service=%s version=%s env=%s", serviceName, serviceVersion, deploymentEnv)
 	}
 
+	// Initialize OTel metrics
+	initMetrics()
+
 	// Return shutdown function
 	return func() {
 		if err := uptrace.Shutdown(ctx); err != nil {
 			log.Printf("Error shutting down Uptrace: %v", err)
 		}
+	}
+}
+
+// initMetrics creates OpenTelemetry metric instruments
+func initMetrics() {
+	meter := otel.Meter("backend")
+
+	requestCounter, err := meter.Int64Counter(
+		"backend.requests.total",
+		metric.WithDescription("Total number of requests processed"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		log.Printf("Failed to create request counter: %v", err)
+	}
+
+	errorCounter, err := meter.Int64Counter(
+		"backend.errors.total",
+		metric.WithDescription("Total number of errors"),
+		metric.WithUnit("{error}"),
+	)
+	if err != nil {
+		log.Printf("Failed to create error counter: %v", err)
+	}
+
+	requestDuration, err := meter.Float64Histogram(
+		"backend.request.duration",
+		metric.WithDescription("Request duration in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		log.Printf("Failed to create duration histogram: %v", err)
+	}
+
+	metrics = &Metrics{
+		RequestCounter:  requestCounter,
+		ErrorCounter:    errorCounter,
+		RequestDuration: requestDuration,
+	}
+}
+
+// GetMetrics returns the metrics instance
+func GetMetrics() *Metrics {
+	return metrics
+}
+
+// RecordRequest records a request metric
+func RecordRequest(ctx context.Context, method, path string, statusCode int, duration float64) {
+	if metrics == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.String("http.method", method),
+		attribute.String("http.route", path),
+		attribute.Int("http.status_code", statusCode),
+	}
+
+	metrics.RequestCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
+	metrics.RequestDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
+
+	// Count errors (5xx status codes)
+	if statusCode >= 500 {
+		metrics.ErrorCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
 	}
 }
 

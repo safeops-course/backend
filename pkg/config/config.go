@@ -20,6 +20,8 @@ type Config struct {
 	BuildDate       string
 	RandomDelayMax  int
 	RandomErrorRate float64
+	ConfigPath      string // Directory to watch for config changes (ConfigMaps/Secrets)
+	JWTSecret       string // Secret for signing JWT tokens
 }
 
 // Parse reads configuration from environment variables and command-line flags.
@@ -35,6 +37,8 @@ func Parse() Config {
 	buildDate := flag.String("build-date", defaults.BuildDate, "Build timestamp in RFC3339 format")
 	randomDelay := flag.Int("random-delay", defaults.RandomDelayMax, "Maximum random delay in milliseconds injected per request")
 	randomError := flag.Float64("random-error-rate", defaults.RandomErrorRate, "Probability [0-1] to inject random HTTP 500 errors")
+	configPath := flag.String("config-path", defaults.ConfigPath, "Directory to watch for config changes (ConfigMaps/Secrets)")
+	jwtSecret := flag.String("jwt-secret", defaults.JWTSecret, "Secret for signing JWT tokens")
 
 	flag.Parse()
 
@@ -48,6 +52,8 @@ func Parse() Config {
 		BuildDate:       *buildDate,
 		RandomDelayMax:  *randomDelay,
 		RandomErrorRate: *randomError,
+		ConfigPath:      *configPath,
+		JWTSecret:       *jwtSecret,
 	}
 
 	return cfg
@@ -64,6 +70,8 @@ func defaultConfig() Config {
 		BuildDate:       envString("APP_BUILD_DATE", version.BuildDate),
 		RandomDelayMax:  envInt("RANDOM_DELAY_MAX", 0),
 		RandomErrorRate: envFloat("RANDOM_ERROR_RATE", 0),
+		ConfigPath:      envString("CONFIG_PATH", ""),
+		JWTSecret:       envString("JWT_SECRET", "change-me-in-production"),
 	}
 }
 
