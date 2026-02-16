@@ -180,7 +180,7 @@ func TestOpenAPIEndpoint(t *testing.T) {
 
 func TestSwaggerEndpoint(t *testing.T) {
 	srv := newTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/swagger", nil)
+	req := httptest.NewRequest(http.MethodGet, "/swagger/index.html", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 
