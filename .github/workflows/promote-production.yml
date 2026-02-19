@@ -18,10 +18,11 @@ jobs:
     permissions:
       packages: write
       contents: write
+      security-events: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -78,6 +79,16 @@ jobs:
           echo "staging_tag=$STAGING_TAG" >> $GITHUB_OUTPUT
           echo "production_tag=$PRODUCTION_TAG" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy security scan (fail on critical)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.staging_tag }}
+          format: table
+          severity: CRITICAL
+          vuln-type: os,library
+          ignore-unfixed: false
+          exit-code: "1"
 
       - name: Promote staging tag to production
         run: |

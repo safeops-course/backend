@@ -23,6 +23,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	"github.com/ldbl/sre/backend/pkg/config"
@@ -176,8 +178,8 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		// Allow CORS for frontend
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, traceparent, tracestate")
-		w.Header().Set("Access-Control-Expose-Headers", "traceparent, tracestate")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, traceparent, tracestate, baggage")
+		w.Header().Set("Access-Control-Expose-Headers", "traceparent, tracestate, baggage")
 
 		// Handle preflight requests
 		if r.Method == "OPTIONS" {
@@ -219,12 +221,27 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Use context for trace correlation
-		s.logger.Ctx(r.Context()).Info("request",
+		fields := []zap.Field{
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
 			zap.Int("status", recorder.status),
 			zap.Duration("duration", time.Since(start)),
+		}
+		spanCtx := oteltrace.SpanContextFromContext(r.Context())
+		if spanCtx.IsValid() {
+			fields = append(fields,
+				zap.String("trace_id", spanCtx.TraceID().String()),
+				zap.String("span_id", spanCtx.SpanID().String()),
+			)
+		}
+
+		// Use context for trace correlation
+		s.logger.Ctx(r.Context()).Info("request", fields...)
+		telemetry.AddEvent(r.Context(), "request.log",
+			attribute.String("http.method", r.Method),
+			attribute.String("http.path", r.URL.Path),
+			attribute.Int("http.status_code", recorder.status),
+			attribute.Int64("http.duration_ms", time.Since(start).Milliseconds()),
 		)
 	})
 }
@@ -499,12 +516,33 @@ func (s *Server) handleDelay(w http.ResponseWriter, r *http.Request) {
 // @Success      200  {object}  StatusResponse
 // @Router       /panic [get]
 func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	panicErr := errors.New("panic endpoint invoked")
+	telemetry.RecordError(ctx, panicErr)
+
+	traceID := ""
+	spanCtx := oteltrace.SpanContextFromContext(ctx)
+	if spanCtx.IsValid() {
+		traceID = spanCtx.TraceID().String()
+	}
+
+	s.logger.Ctx(ctx).Error("/panic invoked, terminating process with exit code 255",
+		zap.Error(panicErr),
+		zap.String("trace_id", traceID),
+	)
+	telemetry.AddEvent(ctx, "panic.log",
+		attribute.String("event.name", "panic_termination"),
+		attribute.String("trace_id", traceID),
+	)
+
 	go func() {
-		time.Sleep(10 * time.Millisecond)
-		s.logger.Ctx(r.Context()).Warn("/panic invoked, terminating process with exit code 255")
+		time.Sleep(50 * time.Millisecond)
 		os.Exit(255)
 	}()
-	respondJSON(w, http.StatusOK, map[string]string{"status": "terminating"})
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status":   "terminating",
+		"trace_id": traceID,
+	})
 }
 
 // handleError godoc
@@ -966,4 +1004,3 @@ const indexTemplate = `<!DOCTYPE html>
   </div>
 </body>
 </html>`
-

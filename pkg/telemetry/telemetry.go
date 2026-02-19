@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
@@ -30,13 +31,25 @@ func Init(ctx context.Context) func() {
 	serviceName := getEnv("SERVICE_NAME", "backend")
 	serviceVersion := getEnv("SERVICE_VERSION", "v1.0.0")
 	deploymentEnv := getEnv("DEPLOYMENT_ENVIRONMENT", "development")
+	uptraceDSN := os.Getenv("UPTRACE_DSN")
 
-	// Configure Uptrace
-	uptrace.ConfigureOpentelemetry(
-		uptrace.WithServiceName(serviceName),
-		uptrace.WithServiceVersion(serviceVersion),
-		uptrace.WithDeploymentEnvironment(deploymentEnv),
-	)
+	// Ensure W3C trace context and baggage propagation across service boundaries.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+
+	if uptraceDSN == "" {
+		log.Printf("OpenTelemetry running without Uptrace export: UPTRACE_DSN is not set (service=%s env=%s)", serviceName, deploymentEnv)
+	} else {
+		// Configure Uptrace export when DSN is available.
+		uptrace.ConfigureOpentelemetry(
+			uptrace.WithDSN(uptraceDSN),
+			uptrace.WithServiceName(serviceName),
+			uptrace.WithServiceVersion(serviceVersion),
+			uptrace.WithDeploymentEnvironment(deploymentEnv),
+		)
+	}
 
 	// Set additional resource attributes
 	_, err := resource.New(ctx,
@@ -57,6 +70,9 @@ func Init(ctx context.Context) func() {
 
 	// Return shutdown function
 	return func() {
+		if uptraceDSN == "" {
+			return
+		}
 		if err := uptrace.Shutdown(ctx); err != nil {
 			log.Printf("Error shutting down Uptrace: %v", err)
 		}
