@@ -83,7 +83,7 @@ func defaultConfig() Config {
 		JWTSecret:          envString("JWT_SECRET", ""),
 		JWTTokenTTLMinutes: envInt("JWT_TOKEN_TTL_MINUTES", 60),
 		DatabaseURL:        envString("DATABASE_URL", ""),
-		AuthDBPath:         envString("AUTH_DB_PATH", "data/users.json"),
+		AuthDBPath:         envString("AUTH_DB_PATH", "/tmp/users.json"),
 	}
 }
 

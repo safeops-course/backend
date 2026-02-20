@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +26,6 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.opentelemetry.io/otel/attribute"
-	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/ldbl/sre/backend/pkg/config"
@@ -82,12 +82,25 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		s.users = users
 		logger.Info("initialized auth store", zap.String("backend", "postgres"))
 	} else {
-		users, err := newFileUserStore(cfg.AuthDBPath)
+		authStorePath := strings.TrimSpace(cfg.AuthDBPath)
+		if authStorePath == "" {
+			authStorePath = "/tmp/users.json"
+		}
+		if !filepath.IsAbs(authStorePath) {
+			rewrittenPath := filepath.Join("/tmp", authStorePath)
+			logger.Warn("AUTH_DB_PATH is relative; rewriting to writable /tmp path",
+				zap.String("original_path", authStorePath),
+				zap.String("rewritten_path", rewrittenPath),
+			)
+			authStorePath = rewrittenPath
+		}
+
+		users, err := newFileUserStore(authStorePath)
 		if err != nil {
-			logger.Fatal("failed to initialize file auth store", zap.Error(err), zap.String("path", cfg.AuthDBPath))
+			logger.Fatal("failed to initialize file auth store", zap.Error(err), zap.String("path", authStorePath))
 		}
 		s.users = users
-		logger.Warn("DATABASE_URL not set, using file-based auth store", zap.String("path", cfg.AuthDBPath))
+		logger.Warn("DATABASE_URL not set, using file-based auth store", zap.String("path", authStorePath))
 	}
 
 	s.requests = prometheus.NewCounterVec(
@@ -277,16 +290,9 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			zap.Int("status", recorder.status),
 			zap.Duration("duration", time.Since(start)),
 		}
-		spanCtx := oteltrace.SpanContextFromContext(r.Context())
-		if spanCtx.IsValid() {
-			fields = append(fields,
-				zap.String("trace_id", spanCtx.TraceID().String()),
-				zap.String("span_id", spanCtx.SpanID().String()),
-			)
-		}
 
 		// Use context for trace correlation
-		s.logger.Ctx(r.Context()).Info("request", fields...)
+		s.logger.Ctx(r.Context()).Info("request", appendTraceFields(r.Context(), fields...)...)
 		telemetry.AddEvent(r.Context(), "request.log",
 			attribute.String("http.method", r.Method),
 			attribute.String("http.path", r.URL.Path),
@@ -570,16 +576,11 @@ func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
 	panicErr := errors.New("panic endpoint invoked")
 	telemetry.RecordError(ctx, panicErr)
 
-	traceID := ""
-	spanCtx := oteltrace.SpanContextFromContext(ctx)
-	if spanCtx.IsValid() {
-		traceID = spanCtx.TraceID().String()
-	}
+	traceID := traceIDFromContext(ctx)
 
-	s.logger.Ctx(ctx).Error("/panic invoked, terminating process with exit code 255",
+	s.logger.Ctx(ctx).Error("/panic invoked, terminating process with exit code 255", appendTraceFields(ctx,
 		zap.Error(panicErr),
-		zap.String("trace_id", traceID),
-	)
+	)...)
 	telemetry.AddEvent(ctx, "panic.log",
 		attribute.String("event.name", "panic_termination"),
 		attribute.String("trace_id", traceID),
@@ -617,28 +618,28 @@ func (s *Server) handleError(w http.ResponseWriter, r *http.Request) {
 
 	switch level {
 	case "debug":
-		s.logger.Ctx(ctx).Debug("debug level test message",
+		s.logger.Ctx(ctx).Debug("debug level test message", appendTraceFields(ctx,
 			zap.String("endpoint", "/error/debug"),
 			zap.String("request_id", middleware.GetReqID(ctx)),
-		)
+		)...)
 		respondJSON(w, http.StatusOK, map[string]string{
 			"level":   "debug",
 			"message": "debug log generated",
 		})
 	case "info":
-		s.logger.Ctx(ctx).Info("info level test message",
+		s.logger.Ctx(ctx).Info("info level test message", appendTraceFields(ctx,
 			zap.String("endpoint", "/error/info"),
 			zap.String("request_id", middleware.GetReqID(ctx)),
-		)
+		)...)
 		respondJSON(w, http.StatusOK, map[string]string{
 			"level":   "info",
 			"message": "info log generated",
 		})
 	case "warn":
-		s.logger.Ctx(ctx).Warn("warning level test message",
+		s.logger.Ctx(ctx).Warn("warning level test message", appendTraceFields(ctx,
 			zap.String("endpoint", "/error/warn"),
 			zap.String("request_id", middleware.GetReqID(ctx)),
-		)
+		)...)
 		respondJSON(w, http.StatusOK, map[string]string{
 			"level":   "warn",
 			"message": "warning log generated",
@@ -646,11 +647,11 @@ func (s *Server) handleError(w http.ResponseWriter, r *http.Request) {
 	case "error":
 		// Record error in span for tracing
 		telemetry.RecordError(ctx, testErr)
-		s.logger.Ctx(ctx).Error("error level test message",
+		s.logger.Ctx(ctx).Error("error level test message", appendTraceFields(ctx,
 			zap.Error(testErr),
 			zap.String("endpoint", "/error/error"),
 			zap.String("request_id", middleware.GetReqID(ctx)),
-		)
+		)...)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"level":   "error",
 			"message": "error log generated",

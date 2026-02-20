@@ -42,7 +42,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		claims, err := s.validateToken(tokenString)
 		if err != nil {
-			s.logger.Ctx(r.Context()).Warn("auth token validation failed", zap.Error(err))
+			s.logger.Ctx(r.Context()).Warn("auth token validation failed", appendTraceFields(r.Context(), zap.Error(err))...)
 			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 			return
 		}
@@ -79,11 +79,11 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errUserExists):
 			respondJSON(w, http.StatusConflict, map[string]string{"error": "user already exists"})
 		default:
-			s.logger.Ctx(r.Context()).Error("auth register failed",
+			s.logger.Ctx(r.Context()).Error("auth register failed", appendTraceFields(r.Context(),
 				zap.Error(err),
 				zap.String("username", strings.TrimSpace(req.Username)),
 				zap.String("request_id", chimiddleware.GetReqID(r.Context())),
-			)
+			)...)
 			respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to create user"})
 		}
 		return
@@ -91,7 +91,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 
 	token, expiresAt, err := s.issueToken(user.Username)
 	if err != nil {
-		s.logger.Ctx(r.Context()).Error("token generation failed", zap.Error(err))
+		s.logger.Ctx(r.Context()).Error("token generation failed", appendTraceFields(r.Context(), zap.Error(err))...)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
 		return
 	}
@@ -126,7 +126,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, expiresAt, err := s.issueToken(user.Username)
 	if err != nil {
-		s.logger.Ctx(r.Context()).Error("token generation failed", zap.Error(err))
+		s.logger.Ctx(r.Context()).Error("token generation failed", appendTraceFields(r.Context(), zap.Error(err))...)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
 		return
 	}
