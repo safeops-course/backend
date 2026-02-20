@@ -39,7 +39,8 @@ ARG APP_COMMIT_SHORT
 ARG BUILD_DATE
 
 RUN apk add --no-cache ca-certificates tzdata && \
-    adduser -D -u 10001 app
+    adduser -D -u 10001 app && \
+    mkdir -p /home/app/.cache && chown app:app /home/app/.cache
 
 COPY --from=build /out/backend /usr/local/bin/backend
 USER app
