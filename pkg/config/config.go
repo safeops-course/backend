@@ -80,7 +80,7 @@ func defaultConfig() Config {
 		RandomDelayMax:     envInt("RANDOM_DELAY_MAX", 0),
 		RandomErrorRate:    envFloat("RANDOM_ERROR_RATE", 0),
 		ConfigPath:         envString("CONFIG_PATH", ""),
-		JWTSecret:          envString("JWT_SECRET", "change-me-in-production"),
+		JWTSecret:          envString("JWT_SECRET", ""),
 		JWTTokenTTLMinutes: envInt("JWT_TOKEN_TTL_MINUTES", 60),
 		DatabaseURL:        envString("DATABASE_URL", ""),
 		AuthDBPath:         envString("AUTH_DB_PATH", "data/users.json"),

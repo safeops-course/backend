@@ -2,11 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +13,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -27,6 +24,7 @@ var (
 type authUserStore interface {
 	createUser(ctx context.Context, username, password string) (userRecord, error)
 	authenticate(ctx context.Context, username, password string) (userRecord, error)
+	Close() error
 }
 
 type userRecord struct {
@@ -142,16 +140,16 @@ func (s *fileUserStore) createUser(_ context.Context, username, password string)
 		return userRecord{}, errUserExists
 	}
 
-	salt, err := randomSalt()
+	hashedPassword, err := hashPassword(password)
 	if err != nil {
-		return userRecord{}, fmt.Errorf("generate password salt: %w", err)
+		return userRecord{}, fmt.Errorf("hash password: %w", err)
 	}
 
 	record := userRecord{
 		ID:           s.nextID,
 		Username:     normalizedUsername,
-		PasswordSalt: salt,
-		PasswordHash: hashPassword(password, salt),
+		PasswordSalt: "",
+		PasswordHash: hashedPassword,
 		CreatedAt:    time.Now().UTC(),
 	}
 	s.nextID++
@@ -179,11 +177,15 @@ func (s *fileUserStore) authenticate(_ context.Context, username, password strin
 		return userRecord{}, errInvalidCredentials
 	}
 
-	if hashPassword(password, record.PasswordSalt) != record.PasswordHash {
+	if err := comparePassword(record.PasswordHash, password); err != nil {
 		return userRecord{}, errInvalidCredentials
 	}
 
 	return record, nil
+}
+
+func (s *fileUserStore) Close() error {
+	return nil
 }
 
 type postgresUserStore struct {
@@ -227,7 +229,7 @@ CREATE TABLE IF NOT EXISTS app_users (
 	id BIGSERIAL PRIMARY KEY,
 	username VARCHAR(64) NOT NULL,
 	password_hash TEXT NOT NULL,
-	password_salt TEXT NOT NULL,
+	password_salt TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 `
@@ -259,9 +261,9 @@ func (s *postgresUserStore) createUser(ctx context.Context, username, password s
 		ctx = context.Background()
 	}
 
-	salt, err := randomSalt()
+	hashedPassword, err := hashPassword(password)
 	if err != nil {
-		return userRecord{}, fmt.Errorf("generate password salt: %w", err)
+		return userRecord{}, fmt.Errorf("hash password: %w", err)
 	}
 
 	const q = `
@@ -272,7 +274,7 @@ RETURNING id, username, password_hash, password_salt, created_at;
 `
 
 	record := userRecord{}
-	err = s.db.QueryRowContext(ctx, q, normalizedUsername, hashPassword(password, salt), salt).
+	err = s.db.QueryRowContext(ctx, q, normalizedUsername, hashedPassword, "").
 		Scan(&record.ID, &record.Username, &record.PasswordHash, &record.PasswordSalt, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return userRecord{}, errUserExists
@@ -310,11 +312,15 @@ LIMIT 1;
 		return userRecord{}, fmt.Errorf("query user: %w", err)
 	}
 
-	if hashPassword(password, record.PasswordSalt) != record.PasswordHash {
+	if err := comparePassword(record.PasswordHash, password); err != nil {
 		return userRecord{}, errInvalidCredentials
 	}
 
 	return record, nil
+}
+
+func (s *postgresUserStore) Close() error {
+	return s.db.Close()
 }
 
 func normalizeUsername(username string) (string, error) {
@@ -328,15 +334,14 @@ func normalizeUsername(username string) (string, error) {
 	return trimmed, nil
 }
 
-func randomSalt() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
 		return "", err
 	}
-	return base64.StdEncoding.EncodeToString(buf), nil
+	return string(hash), nil
 }
 
-func hashPassword(password, salt string) string {
-	sum := sha256.Sum256([]byte(salt + ":" + password))
-	return hex.EncodeToString(sum[:])
+func comparePassword(storedHash, password string) error {
+	return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(password))
 }

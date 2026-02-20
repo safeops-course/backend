@@ -72,5 +72,8 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Ctx(ctx).Fatal("graceful shutdown failed", zap.Error(err))
 	}
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Ctx(ctx).Error("resource shutdown failed", zap.Error(err))
+	}
 	log.Ctx(ctx).Info("server stopped")
 }

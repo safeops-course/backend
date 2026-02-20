@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,6 +164,66 @@ func TestAuthRegisterAndLogin(t *testing.T) {
 	}
 }
 
+func TestAuthRegisterReturnsGenericInternalError(t *testing.T) {
+	srv := newTestServer(t)
+	srv.users = &testUserStore{
+		createUserErr: errors.New("db insert failed: duplicate key details leaked"),
+	}
+
+	body := `{"username":"alice","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500 on internal register error, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "duplicate key") {
+		t.Fatalf("response leaked internal error details: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unable to create user") {
+		t.Fatalf("expected generic error message, got %s", rec.Body.String())
+	}
+}
+
+func TestAuthEndpointsRejectOversizedBody(t *testing.T) {
+	srv := newTestServer(t)
+
+	oversizedPassword := strings.Repeat("a", int(maxRequestBodyBytes)+128)
+
+	registerBody := `{"username":"alice","password":"` + oversizedPassword + `"}`
+	registerReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(registerRec, registerReq)
+	if registerRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for oversized register body, got %d", registerRec.Code)
+	}
+
+	loginBody := `{"username":"alice","password":"` + oversizedPassword + `"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for oversized login body, got %d", loginRec.Code)
+	}
+}
+
+func TestServerShutdownClosesUserStore(t *testing.T) {
+	srv := newTestServer(t)
+	store := &testUserStore{}
+	srv.users = store
+
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("expected shutdown without error, got %v", err)
+	}
+	if !store.closed {
+		t.Fatalf("expected user store to be closed on shutdown")
+	}
+}
+
 func TestEchoEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	payload := "hello"
@@ -259,4 +321,35 @@ func TestSwaggerEndpoint(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "SwaggerUIBundle") {
 		t.Fatalf("swagger ui bundle not rendered")
 	}
+}
+
+type testUserStore struct {
+	createUserErr   error
+	authenticateErr error
+	closed          bool
+}
+
+func (s *testUserStore) createUser(_ context.Context, username, _ string) (userRecord, error) {
+	if s.createUserErr != nil {
+		return userRecord{}, s.createUserErr
+	}
+	return userRecord{
+		ID:       1,
+		Username: username,
+	}, nil
+}
+
+func (s *testUserStore) authenticate(_ context.Context, username, _ string) (userRecord, error) {
+	if s.authenticateErr != nil {
+		return userRecord{}, s.authenticateErr
+	}
+	return userRecord{
+		ID:       1,
+		Username: username,
+	}, nil
+}
+
+func (s *testUserStore) Close() error {
+	s.closed = true
+	return nil
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 )
 
@@ -66,7 +68,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req authCredentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
@@ -77,7 +79,12 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errUserExists):
 			respondJSON(w, http.StatusConflict, map[string]string{"error": "user already exists"})
 		default:
-			respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			s.logger.Ctx(r.Context()).Error("auth register failed",
+				zap.Error(err),
+				zap.String("username", strings.TrimSpace(req.Username)),
+				zap.String("request_id", chimiddleware.GetReqID(r.Context())),
+			)
+			respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to create user"})
 		}
 		return
 	}
@@ -106,7 +113,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req authCredentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}

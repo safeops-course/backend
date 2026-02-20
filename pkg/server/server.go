@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 	_ "github.com/ldbl/sre/backend/pkg/api/docs" // swagger docs
 )
 
+const maxRequestBodyBytes int64 = 1 << 20
+
 // Server represents the HTTP API.
 type Server struct {
 	cfg           config.Config
@@ -66,6 +69,10 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	}
 	s.ready.Store(true)
 	s.live.Store(true)
+
+	if strings.TrimSpace(cfg.JWTSecret) == "" {
+		logger.Fatal("JWT_SECRET must be set")
+	}
 
 	if strings.TrimSpace(cfg.DatabaseURL) != "" {
 		users, err := newPostgresUserStore(cfg.DatabaseURL)
@@ -195,6 +202,25 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 // Handler returns the HTTP handler for serving requests.
 func (s *Server) Handler() http.Handler {
 	return s.router
+}
+
+// Shutdown releases server resources (watchers, stores).
+func (s *Server) Shutdown(ctx context.Context) error {
+	_ = ctx
+
+	var shutdownErr error
+	if s.configWatcher != nil {
+		if err := s.configWatcher.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+	}
+	if s.users != nil {
+		if err := s.users.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+	}
+
+	return shutdownErr
 }
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
@@ -478,7 +504,7 @@ func (s *Server) handleHeaders(w http.ResponseWriter, r *http.Request) {
 // @Router       /echo [post]
 func (s *Server) handleEcho(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodyBytes))
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
