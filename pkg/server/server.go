@@ -23,8 +23,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
-	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/ldbl/sre/backend/pkg/config"
@@ -49,6 +49,7 @@ type Server struct {
 	randMu        sync.Mutex
 	indexTmpl     *template.Template
 	configWatcher *configwatch.Watcher
+	users         authUserStore
 }
 
 // New constructs a fully configured HTTP server.
@@ -65,6 +66,22 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	}
 	s.ready.Store(true)
 	s.live.Store(true)
+
+	if strings.TrimSpace(cfg.DatabaseURL) != "" {
+		users, err := newPostgresUserStore(cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatal("failed to initialize postgres auth store", zap.Error(err))
+		}
+		s.users = users
+		logger.Info("initialized auth store", zap.String("backend", "postgres"))
+	} else {
+		users, err := newFileUserStore(cfg.AuthDBPath)
+		if err != nil {
+			logger.Fatal("failed to initialize file auth store", zap.Error(err), zap.String("path", cfg.AuthDBPath))
+		}
+		s.users = users
+		logger.Warn("DATABASE_URL not set, using file-based auth store", zap.String("path", cfg.AuthDBPath))
+	}
 
 	s.requests = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -128,18 +145,13 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	r.Get("/", s.handleIndex)
 	r.Get("/healthz", s.handleHealth)
 	r.Get("/readyz", s.handleReady)
-	r.Put("/readyz/enable", s.handleReadyEnable)
-	r.Put("/readyz/disable", s.handleReadyDisable)
 	r.Get("/livez", s.handleLive)
-	r.Put("/livez/enable", s.handleLiveEnable)
-	r.Put("/livez/disable", s.handleLiveDisable)
 	r.Get("/version", s.handleVersion)
 	r.Get("/env", s.handleEnv)
 	r.Get("/headers", s.handleHeaders)
 	r.Post("/echo", s.handleEcho)
 	r.Get("/status/{code}", s.handleStatus)
 	r.Get("/delay/{seconds}", s.handleDelay)
-	r.Get("/panic", s.handlePanic)
 	r.Get("/error", s.handleError)
 	r.Get("/error/{level}", s.handleError)
 	r.Get("/metrics", s.handleMetrics)
@@ -150,6 +162,18 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	r.Get("/configs", s.handleConfigs)
 	r.Post("/token", s.handleTokenGenerate)
 	r.Get("/token/validate", s.handleTokenValidate)
+	r.Post("/auth/register", s.handleAuthRegister)
+	r.Post("/auth/login", s.handleAuthLogin)
+	r.With(s.authMiddleware).Get("/auth/me", s.handleAuthMe)
+
+	r.Group(func(protected chi.Router) {
+		protected.Use(s.authMiddleware)
+		protected.Put("/readyz/enable", s.handleReadyEnable)
+		protected.Put("/readyz/disable", s.handleReadyDisable)
+		protected.Put("/livez/enable", s.handleLiveEnable)
+		protected.Put("/livez/disable", s.handleLiveDisable)
+		protected.Get("/panic", s.handlePanic)
+	})
 
 	// pprof endpoints for profiling
 	r.HandleFunc("/debug/pprof/", pprof.Index)
