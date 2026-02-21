@@ -87,7 +87,15 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 			authStorePath = "/tmp/users.json"
 		}
 		if !filepath.IsAbs(authStorePath) {
-			rewrittenPath := filepath.Join("/tmp", authStorePath)
+			rewrittenPath := filepath.Clean(filepath.Join("/tmp", authStorePath))
+			relPath, relErr := filepath.Rel("/tmp", rewrittenPath)
+			if relErr != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+				safeName := filepath.Base(authStorePath)
+				if safeName == "." || safeName == string(filepath.Separator) || safeName == "" {
+					safeName = "users.json"
+				}
+				rewrittenPath = filepath.Join("/tmp", safeName)
+			}
 			logger.Warn("AUTH_DB_PATH is relative; rewriting to writable /tmp path",
 				zap.String("original_path", authStorePath),
 				zap.String("rewritten_path", rewrittenPath),
