@@ -91,7 +91,7 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 			relPath, relErr := filepath.Rel("/tmp", rewrittenPath)
 			if relErr != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 				safeName := filepath.Base(authStorePath)
-				if safeName == "." || safeName == string(filepath.Separator) || safeName == "" {
+				if safeName == "." || safeName == ".." || safeName == string(filepath.Separator) || safeName == "" {
 					safeName = "users.json"
 				}
 				rewrittenPath = filepath.Join("/tmp", safeName)
