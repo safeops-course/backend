@@ -224,26 +224,32 @@ func (s *postgresUserStore) ensureSchema(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
-	const createTableStmt = `
-CREATE TABLE IF NOT EXISTS app_users (
-	id BIGSERIAL PRIMARY KEY,
-	username VARCHAR(64) NOT NULL,
-	password_hash TEXT NOT NULL,
-	password_salt TEXT NOT NULL DEFAULT '',
-	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+	// Use an advisory lock to prevent concurrent schema creation.
+	// Without this, multiple pods starting simultaneously can race on
+	// BIGSERIAL sequence type creation (pg_type_typname_nsp_index conflict).
+	const schemaStmt = `
+DO $$
+BEGIN
+  PERFORM pg_advisory_lock(hashtext('app_users_schema'));
+
+  CREATE TABLE IF NOT EXISTS app_users (
+    id BIGSERIAL PRIMARY KEY,
+    username VARCHAR(64) NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS app_users_username_lower_uq
+    ON app_users ((lower(username)));
+
+  PERFORM pg_advisory_unlock(hashtext('app_users_schema'));
+END;
+$$;
 `
 
-	if _, err := s.db.ExecContext(ctx, createTableStmt); err != nil {
+	if _, err := s.db.ExecContext(ctx, schemaStmt); err != nil {
 		return fmt.Errorf("initialize auth table: %w", err)
-	}
-
-	const createIndexStmt = `
-CREATE UNIQUE INDEX IF NOT EXISTS app_users_username_lower_uq ON app_users ((lower(username)));
-`
-
-	if _, err := s.db.ExecContext(ctx, createIndexStmt); err != nil {
-		return fmt.Errorf("initialize auth index: %w", err)
 	}
 
 	return nil
