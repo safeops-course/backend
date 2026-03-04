@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -82,8 +83,8 @@ func defaultConfig() Config {
 		ConfigPath:         envString("CONFIG_PATH", ""),
 		JWTSecret:          envString("JWT_SECRET", ""),
 		JWTTokenTTLMinutes: envInt("JWT_TOKEN_TTL_MINUTES", 60),
-		DatabaseURL:        envString("DATABASE_URL", ""),
-		AuthDBPath:         envString("AUTH_DB_PATH", "data/users.json"),
+		DatabaseURL:        buildDatabaseURL(),
+		AuthDBPath:         envString("AUTH_DB_PATH", "/tmp/users.json"),
 	}
 }
 
@@ -112,6 +113,33 @@ func envFloat(key string, fallback float64) float64 {
 		}
 	}
 	return fallback
+}
+
+// buildDatabaseURL returns DATABASE_URL if set, otherwise composes it from
+// POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB.
+// Composing from parts ensures the password is properly URL-encoded.
+func buildDatabaseURL() string {
+	if v := envString("DATABASE_URL", ""); v != "" {
+		return v
+	}
+	user := envString("POSTGRES_USER", "")
+	pass := envString("POSTGRES_PASSWORD", "")
+	host := envString("POSTGRES_HOST", "")
+	if user == "" || host == "" {
+		return ""
+	}
+	port := envString("POSTGRES_PORT", "5432")
+	dbName := envString("POSTGRES_DB", "app")
+	sslMode := envString("POSTGRES_SSLMODE", "disable")
+
+	u := &url.URL{
+		Scheme:   "postgresql",
+		User:     url.UserPassword(user, pass),
+		Host:     fmt.Sprintf("%s:%s", host, port),
+		Path:     dbName,
+		RawQuery: fmt.Sprintf("sslmode=%s", sslMode),
+	}
+	return u.String()
 }
 
 // Addr returns the HTTP listen address.
