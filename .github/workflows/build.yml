@@ -26,7 +26,6 @@ jobs:
       actions: read
       contents: read
       packages: write
-      security-events: write
 
     steps:
       - name: Checkout code
@@ -107,12 +106,6 @@ jobs:
           vuln-type: os,library
           ignore-unfixed: true
           exit-code: "0"
-
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
 
       - name: Output summary
         run: |
