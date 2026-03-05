@@ -47,15 +47,7 @@ reviews:
       instructions: |
         - Repository guidelines for AI agents — learn and apply these principles
   path_filters:
-    - "**/*.go"
-    - "**/go.mod"
-    - "**/go.sum"
-    - "**/Dockerfile"
-    - "**/Makefile"
-    - "**/.github/workflows/*.yml"
-    - "**/CLAUDE.md"
     - "!**/vendor/**"
-    - "!**/*_test.go"
   tools:
     gitleaks:
       enabled: true
