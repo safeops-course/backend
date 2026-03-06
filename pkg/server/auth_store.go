@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/exaring/otelpgx"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -197,10 +199,13 @@ func newPostgresUserStore(databaseURL string) (*postgresUserStore, error) {
 		return nil, errors.New("database URL is empty")
 	}
 
-	db, err := sql.Open("pgx", databaseURL)
+	pgxCfg, err := pgx.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("open auth database: %w", err)
+		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
+	pgxCfg.Tracer = otelpgx.NewTracer()
+
+	db := stdlib.OpenDB(*pgxCfg)
 
 	store := &postgresUserStore{db: db}
 

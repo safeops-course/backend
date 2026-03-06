@@ -126,7 +126,7 @@ func parseBearerToken(r *http.Request) (string, error) {
 func (s *Server) handleTokenGenerate(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.logger.Ctx(r.Context()).Error("reading request body failed", appendTraceFields(r.Context(), zap.Error(err))...)
+		s.logger.Ctx(r.Context()).Error("reading request body failed", zap.Error(err))
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -139,12 +139,12 @@ func (s *Server) handleTokenGenerate(w http.ResponseWriter, r *http.Request) {
 
 	t, expiresAt, err := s.issueToken(user)
 	if err != nil {
-		s.logger.Ctx(r.Context()).Error("signing token failed", appendTraceFields(r.Context(), zap.Error(err))...)
+		s.logger.Ctx(r.Context()).Error("signing token failed", zap.Error(err))
 		http.Error(w, "failed to generate token", http.StatusInternalServerError)
 		return
 	}
 
-	s.logger.Ctx(r.Context()).Info("token generated", appendTraceFields(r.Context(), zap.String("user", user))...)
+	s.logger.Ctx(r.Context()).Info("token generated", zap.String("user", user))
 
 	respondJSON(w, http.StatusOK, TokenResponse{
 		Token:     t,
@@ -170,12 +170,12 @@ func (s *Server) handleTokenValidate(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := s.validateToken(tokenString)
 	if err != nil {
-		s.logger.Ctx(r.Context()).Warn("token validation failed", appendTraceFields(r.Context(), zap.Error(err))...)
+		s.logger.Ctx(r.Context()).Warn("token validation failed", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
-	s.logger.Ctx(r.Context()).Info("token validated", appendTraceFields(r.Context(), zap.String("user", claims.Name))...)
+	s.logger.Ctx(r.Context()).Info("token validated", zap.String("user", claims.Name))
 
 	respondJSON(w, http.StatusOK, TokenValidationResponse{
 		TokenName: claims.Name,
