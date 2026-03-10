@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/exaring/otelpgx"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -197,20 +199,38 @@ func newPostgresUserStore(databaseURL string) (*postgresUserStore, error) {
 		return nil, errors.New("database URL is empty")
 	}
 
-	db, err := sql.Open("pgx", databaseURL)
+	pgxCfg, err := pgx.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("open auth database: %w", err)
+		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
+	pgxCfg.Tracer = otelpgx.NewTracer()
+
+	db := stdlib.OpenDB(*pgxCfg)
 
 	store := &postgresUserStore{db: db}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	// Retry connecting to postgres with backoff.
+	// Backend often starts before postgres is ready in Kubernetes.
+	const maxRetries = 5
+	var lastErr error
+	for i := range maxRetries {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		lastErr = db.PingContext(ctx)
+		cancel()
+		if lastErr == nil {
+			break
+		}
+		if i < maxRetries-1 {
+			time.Sleep(time.Duration(i+1) * time.Second)
+		}
+	}
+	if lastErr != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("ping auth database: %w", err)
+		return nil, fmt.Errorf("ping auth database after %d attempts: %w", maxRetries, lastErr)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if err := store.ensureSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
