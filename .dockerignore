@@ -1,0 +1,7 @@
+.gocache
+.git
+.gitignore
+Dockerfile
+node_modules
+bin
+*.md

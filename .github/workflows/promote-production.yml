@@ -1,0 +1,152 @@
+name: Promote to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_tag:
+        description: 'Staging tag (leave empty for latest)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/backend
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: write
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Log in to Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Get staging tag
+        id: tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          INPUT_TAG="${{ inputs.staging_tag }}"
+
+          if [[ -n "$INPUT_TAG" ]]; then
+            STAGING_TAG="$INPUT_TAG"
+            echo "Using provided tag: $STAGING_TAG"
+          else
+            echo "Fetching latest staging tag..."
+
+            LATEST_TAG=$(gh api \
+              "/users/${{ github.repository_owner }}/packages/container/backend/versions" \
+              --jq '.[].metadata.container.tags[]' 2>/dev/null | \
+              grep -E '^staging-v[0-9]+\.[0-9]+\.[0-9]+-[a-f0-9]+-[0-9]+$' | \
+              sort -t'-' -k4 -n -r | \
+              head -1)
+
+            if [[ -z "$LATEST_TAG" ]]; then
+              echo "No staging tags found"
+              exit 1
+            fi
+
+            STAGING_TAG="$LATEST_TAG"
+            echo "Found latest staging tag: $STAGING_TAG"
+          fi
+
+          if [[ ! "$STAGING_TAG" =~ ^staging-v[0-9]+\.[0-9]+\.[0-9]+-[a-f0-9]+-[0-9]+$ ]]; then
+            echo "Invalid staging tag format: $STAGING_TAG"
+            exit 1
+          fi
+
+          SUFFIX=${STAGING_TAG#staging-}
+          PRODUCTION_TAG="production-${SUFFIX}"
+
+          # Extract version (e.g., v0.0.1 from staging-v0.0.1-abc123-123456)
+          VERSION=$(echo "$STAGING_TAG" | sed -E 's/staging-(v[0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
+
+          echo "staging_tag=$STAGING_TAG" >> $GITHUB_OUTPUT
+          echo "production_tag=$PRODUCTION_TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy security scan (fail on critical)
+        uses: aquasecurity/trivy-action@0.34.2
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.staging_tag }}
+          format: table
+          severity: CRITICAL
+          vuln-type: os,library
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Promote staging tag to production
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:production \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.production_tag }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.staging_tag }}
+
+      - name: Verify promoted image
+        run: |
+          docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.production_tag }}
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.tags.outputs.version }}"
+
+          # Check if release exists and its status
+          if gh release view "$VERSION" &>/dev/null; then
+            IS_DRAFT=$(gh release view "$VERSION" --json isDraft -q '.isDraft')
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              echo "Draft release $VERSION exists, publishing it..."
+              gh release edit "$VERSION" --draft=false --latest
+              # Update with generated notes
+              gh release edit "$VERSION" --notes "$(gh api repos/${{ github.repository }}/releases/generate-notes -f tag_name="$VERSION" -q '.body')"
+            else
+              echo "Release $VERSION already published, skipping..."
+            fi
+          else
+            echo "Creating release $VERSION..."
+            gh release create "$VERSION" \
+              --title "Release $VERSION" \
+              --generate-notes
+          fi
+
+      - name: Bump version for next builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.tags.outputs.version }}"
+          CURRENT="${VERSION#v}"  # Remove 'v' prefix
+
+          MAJOR=$(echo $CURRENT | cut -d. -f1)
+          MINOR=$(echo $CURRENT | cut -d. -f2)
+          PATCH=$(echo $CURRENT | cut -d. -f3)
+
+          NEXT_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          # Check if next version tag already exists
+          if git rev-parse "$NEXT_VERSION" &>/dev/null; then
+            echo "Tag $NEXT_VERSION already exists, skipping..."
+          else
+            echo "Creating git tag $NEXT_VERSION..."
+            git tag "$NEXT_VERSION"
+            git push origin "$NEXT_VERSION"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Production Promotion" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**From:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.staging_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**To:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.production_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Alias:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:production\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release:** ${{ steps.tags.outputs.version }}" >> $GITHUB_STEP_SUMMARY
