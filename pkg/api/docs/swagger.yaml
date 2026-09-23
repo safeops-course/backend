@@ -1,0 +1,486 @@
+basePath: /
+definitions:
+  pkg_server.ConfigsResponse:
+    properties:
+      configs:
+        additionalProperties:
+          type: string
+        type: object
+      enabled:
+        example: true
+        type: boolean
+      message:
+        type: string
+      path:
+        example: /etc/config
+        type: string
+    type: object
+  pkg_server.DelayResponse:
+    properties:
+      delay:
+        example: "5"
+        type: string
+    type: object
+  pkg_server.ErrorResponse:
+    properties:
+      error:
+        example: test error
+        type: string
+      level:
+        example: error
+        type: string
+      message:
+        example: error log generated
+        type: string
+    type: object
+  pkg_server.StatusResponse:
+    properties:
+      status:
+        example: ok
+        type: string
+    type: object
+  pkg_server.TokenResponse:
+    properties:
+      expires_at:
+        type: string
+      token:
+        type: string
+    type: object
+  pkg_server.TokenValidationResponse:
+    properties:
+      expires_at:
+        type: string
+      issued_at:
+        type: string
+      token_name:
+        type: string
+    type: object
+  pkg_server.VersionResponse:
+    properties:
+      build_time:
+        example: "2024-01-01T00:00:00Z"
+        type: string
+      commit:
+        example: abc1234567890
+        type: string
+      commit_short:
+        example: abc1234
+        type: string
+      version:
+        example: v1.0.0
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    name: LDBL Team
+    url: https://github.com/ldbl/backend
+  description: Podinfo-inspired Go microservice for Kubernetes demos. Exposes health
+    probes, chaos endpoints, metrics, and observability features.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: SRE Control Plane Backend API
+  version: "1.0"
+paths:
+  /:
+    get:
+      description: Returns HTML landing page with service information
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML page
+          schema:
+            type: string
+      summary: Landing page
+      tags:
+      - General
+  /configs:
+    get:
+      description: Returns values from watched ConfigMaps/Secrets
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.ConfigsResponse'
+      summary: Config watcher values
+      tags:
+      - Config
+  /delay/{seconds}:
+    get:
+      description: Delays the response by the specified number of seconds
+      parameters:
+      - description: Delay in seconds
+        in: path
+        name: seconds
+        required: true
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.DelayResponse'
+        "400":
+          description: Invalid delay
+          schema:
+            type: string
+      summary: Delay response
+      tags:
+      - Chaos
+  /echo:
+    post:
+      consumes:
+      - application/json
+      description: Returns the request body as-is
+      parameters:
+      - description: Request body to echo
+        in: body
+        name: body
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Echoed body
+          schema:
+            type: string
+        "204":
+          description: Empty body
+        "400":
+          description: Bad request
+          schema:
+            type: string
+      summary: Echo request body
+      tags:
+      - Debug
+  /env:
+    get:
+      description: Returns all environment variables (use with caution in production)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Environment variables
+      tags:
+      - Debug
+  /error:
+    get:
+      description: Generates log entries at different levels for testing observability
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.ErrorResponse'
+        "400":
+          description: Invalid level
+          schema:
+            type: string
+        "500":
+          description: Error level generates 500
+          schema:
+            $ref: '#/definitions/pkg_server.ErrorResponse'
+      summary: Generate test logs
+      tags:
+      - Observability
+  /error/{level}:
+    get:
+      description: Generates log entries at different levels for testing observability
+      parameters:
+      - default: error
+        description: 'Log level: debug, info, warn, error'
+        in: path
+        name: level
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.ErrorResponse'
+        "400":
+          description: Invalid level
+          schema:
+            type: string
+        "500":
+          description: Error level generates 500
+          schema:
+            $ref: '#/definitions/pkg_server.ErrorResponse'
+      summary: Generate test logs
+      tags:
+      - Observability
+  /headers:
+    get:
+      description: Returns all HTTP request headers
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Request headers
+      tags:
+      - Debug
+  /healthz:
+    get:
+      description: Returns service health status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Health check
+      tags:
+      - Health
+  /livez:
+    get:
+      description: Returns liveness status for Kubernetes
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Liveness probe
+      tags:
+      - Health
+  /livez/disable:
+    put:
+      description: Sets the service as not live (triggers container restart)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Disable liveness
+      tags:
+      - Health
+  /livez/enable:
+    put:
+      description: Sets the service as live
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Enable liveness
+      tags:
+      - Health
+  /metrics:
+    get:
+      description: Returns Prometheus metrics in text exposition format
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Prometheus metrics
+          schema:
+            type: string
+      summary: Prometheus metrics
+      tags:
+      - Observability
+  /openapi:
+    get:
+      description: Returns OpenAPI 3.0 specification in JSON format
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: OpenAPI specification
+      tags:
+      - Documentation
+  /panic:
+    get:
+      description: Terminates the process with exit code 255 (for testing pod restarts)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Terminate process
+      tags:
+      - Chaos
+  /readyz:
+    get:
+      description: Returns readiness status for Kubernetes
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Readiness probe
+      tags:
+      - Health
+  /readyz/disable:
+    put:
+      description: Sets the service as not ready (for graceful shutdown testing)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Disable readiness
+      tags:
+      - Health
+  /readyz/enable:
+    put:
+      description: Sets the service as ready
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.StatusResponse'
+      summary: Enable readiness
+      tags:
+      - Health
+  /status/{code}:
+    get:
+      description: Returns the specified HTTP status code (for testing)
+      parameters:
+      - description: HTTP status code (100-599)
+        in: path
+        name: code
+        required: true
+        type: integer
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Status message
+          schema:
+            type: string
+        "400":
+          description: Invalid status code
+          schema:
+            type: string
+      summary: Return specific HTTP status
+      tags:
+      - Chaos
+  /swagger:
+    get:
+      description: Returns Swagger UI HTML page
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML page
+          schema:
+            type: string
+      summary: Swagger UI
+      tags:
+      - Documentation
+  /token:
+    post:
+      consumes:
+      - text/plain
+      description: Creates a JWT token valid for 5 minutes
+      parameters:
+      - description: Username (defaults to 'anonymous')
+        in: body
+        name: body
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.TokenResponse'
+        "400":
+          description: Bad request
+          schema:
+            type: string
+        "500":
+          description: Internal error
+          schema:
+            type: string
+      summary: Generate JWT token
+      tags:
+      - Auth
+  /token/validate:
+    get:
+      description: Validates a JWT token from the Authorization header
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.TokenValidationResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Validate JWT token
+      tags:
+      - Auth
+  /version:
+    get:
+      description: Returns service version, commit, and build information
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pkg_server.VersionResponse'
+      summary: Version info
+      tags:
+      - General
+schemes:
+- http
+- https
+securityDefinitions:
+  BearerAuth:
+    description: Type "Bearer" followed by a space and JWT token
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

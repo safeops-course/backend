@@ -1,0 +1,11 @@
+# Trivy ignore file for known false positives or accepted vulnerabilities
+# See: https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/
+
+# Example: Ignore specific CVE
+# CVE-2023-12345
+
+# Example: Ignore vulnerabilities in specific packages
+# pkg:golang/github.com/example/package@1.2.3
+
+# Example: Ignore by severity (not recommended for production)
+# CRITICAL

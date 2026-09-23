@@ -1,0 +1,75 @@
+language: en-US
+early_access: false
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+  path_instructions:
+    - path: "**"
+      instructions: |
+        - CONTEXT: Go microservice — SRE reference backend (health probes, chaos, metrics, tracing)
+        - This is a learning/reference service, not a production product — keep it simple
+        - KISS principle: simple > complex in all decisions
+        - Be strict on: security vulnerabilities, error handling, goroutine leaks
+        - Be fair on: established patterns, test coverage for demo endpoints
+    - path: "**/*.go"
+      instructions: |
+        - Go 1.24, chi router, Prometheus metrics, OpenTelemetry tracing
+        - Config is env-based only (no config files) — all via pkg/config
+        - Version info injected via ldflags — never hardcode
+        - Middleware order matters (see server.go New() function)
+        - Prometheus uses custom registry, not global default
+        - Check: proper error handling, no ignored errors
+        - Check: context propagation for OTel spans
+        - Check: no goroutine leaks (defer cleanup, context cancellation)
+        - Tests use net/http/httptest — keep it simple, no external frameworks
+    - path: "Dockerfile"
+      instructions: |
+        - Multi-stage build: golang:alpine builder → alpine runtime
+        - Must run as non-root user (app, uid 10001)
+        - CGO_ENABLED=0 for static binary
+        - Check: no unnecessary packages in runtime stage
+        - Check: build args for version metadata are passed correctly
+    - path: "**/.github/workflows/*.yml"
+      instructions: |
+        - build.yml: multi-platform Docker build (amd64+arm64), GHCR push, Trivy scan
+        - promote-production.yml: re-tag staging→production (no rebuild), Trivy gate, GitHub Release
+        - Check: Trivy scan is non-blocking in build, blocking for production promotion
+        - Check: image tags follow convention (env-version-sha-timestamp)
+        - Check: proper secret handling, no secrets in logs
+    - path: "**/CLAUDE.md"
+      instructions: |
+        - Repository guidelines for AI agents — learn and apply these principles
+  path_filters:
+    - "!**/vendor/**"
+  tools:
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    hadolint:
+      enabled: true
+    golangci-lint:
+      enabled: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/CLAUDE.md"
+  learnings:
+    scope: "local"
+  issues:
+    scope: "local"
+  pull_requests:
+    scope: "local"
+
+chat:
+  auto_reply: false
+tone_instructions: "KISS principle: simple > complex. This is a reference/learning service — focus on correctness, security, and clean Go patterns. Skip over-engineering suggestions."
