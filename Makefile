@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 BIN_DIR := $(CURDIR)/bin
 PORT ?= 8080
-GO_VERSION ?= 1.24.0
+GO_VERSION ?= 1.25.13
 APP_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)
 APP_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo dev)
 APP_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
