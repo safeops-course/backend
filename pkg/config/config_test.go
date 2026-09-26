@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -69,5 +70,33 @@ func TestInvalidBooleanEnvStopsTheStart(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "AUTH_REGISTRATION_ENABLED") {
 		t.Fatalf("expected an error naming AUTH_REGISTRATION_ENABLED, got %v", err)
+	}
+}
+
+// A flag overrides its environment variable, so an invalid value there must not stop the start.
+func TestFlagOverridesInvalidBooleanEnv(t *testing.T) {
+	invalid := []string{"AUTH_REGISTRATION_ENABLED", "CHAOS_ENABLED"}
+
+	got := envErrorsStillInEffect(invalid, map[string]bool{"registration-enabled": true})
+	if len(got) != 1 || got[0] != "CHAOS_ENABLED" {
+		t.Fatalf("expected only CHAOS_ENABLED to stay an error, got %v", got)
+	}
+	if got := envErrorsStillInEffect(invalid, map[string]bool{}); len(got) != 2 {
+		t.Fatalf("without flags both errors stay, got %v", got)
+	}
+}
+
+func TestValidateRejectsNonFiniteOrHugeDelayMax(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), MaxDelaySeconds + 1, 9223372022} {
+		cfg := validConfig()
+		cfg.DelayMaxSeconds = value
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("DELAY_MAX_SECONDS=%v must be rejected", value)
+		}
+	}
+	cfg := validConfig()
+	cfg.DelayMaxSeconds = MaxDelaySeconds
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("DELAY_MAX_SECONDS=%d must be accepted: %v", MaxDelaySeconds, err)
 	}
 }

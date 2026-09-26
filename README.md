@@ -76,13 +76,17 @@ exposes before adding it there.
 | `CHAOS_ENABLED` | `false` | Expose `/panic` and the readiness/liveness toggles (still need a token) |
 | `PPROF_ENABLED` | `false` | Serve `/debug/pprof/*` on `PPROF_ADDR` |
 | `PPROF_ADDR` | `127.0.0.1:6060` | Profiling listener (loopback: reach it with `kubectl port-forward`) |
-| `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` |
+| `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` (1..300; the HTTP write timeout is this + 15s) |
 | `AUTH_REGISTRATION_ENABLED` | `true` | Allow `POST /auth/register` |
 | `AUTH_LOGIN_ATTEMPTS_PER_MINUTE` | `10` | Login attempts per username per minute, per pod |
 | `AUTH_REGISTRATIONS_PER_MINUTE` | `10` | Registrations per minute, per pod |
 
-Invalid values fail loudly: a short `JWT_SECRET`, a boolean that is not `true`/`false`, or a zero
-limit stops the start with a message naming the variable.
+Invalid values fail loudly: a short `JWT_SECRET`, a boolean that is not `true`/`false` (unless its
+flag overrides it), a zero limit or a `DELAY_MAX_SECONDS` outside 1..300 stops the start with a
+message naming the variable.
+
+Rate limits: when 10 000 keys are tracked, the oldest window is evicted - login never locks out
+everyone; more guesses on one account cost an attacker 10 000 requests per extra window.
 
 Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`) is injected via ldflags at build time.
 

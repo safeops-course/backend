@@ -297,26 +297,29 @@ func TestFixedWindowLimiter(t *testing.T) {
 	}
 }
 
-func TestFixedWindowLimiterFailsClosedWhenFull(t *testing.T) {
+// A full limiter must keep admitting new keys (no login lockout for everyone), evicting the oldest
+// window, while keys that are still tracked keep their limit.
+func TestFixedWindowLimiterEvictsOldestWhenFull(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	limiter := newFixedWindowLimiter(1)
 	limiter.now = func() time.Time { return now }
 
 	for i := range limiterMaxKeys {
 		limiter.allow("key-" + strconv.Itoa(i))
-	}
-	if len(limiter.windows) != limiterMaxKeys {
-		t.Fatalf("expected %d windows, got %d", limiterMaxKeys, len(limiter.windows))
-	}
-	if allowed, _ := limiter.allow("one-more"); allowed {
-		t.Fatalf("a full limiter must refuse new keys")
+		now = now.Add(time.Millisecond) // key-0 is the oldest window
 	}
 
-	now = now.Add(time.Minute)
-	if allowed, _ := limiter.allow("one-more"); !allowed {
-		t.Fatalf("after the windows expire new keys must be allowed again")
+	if allowed, _ := limiter.allow("new-user"); !allowed {
+		t.Fatalf("a full limiter must still admit a new key")
 	}
-	if len(limiter.windows) != 1 {
-		t.Fatalf("expired windows should have been dropped, %d left", len(limiter.windows))
+	if len(limiter.windows) != limiterMaxKeys {
+		t.Fatalf("map must stay bounded at %d, got %d", limiterMaxKeys, len(limiter.windows))
+	}
+	if _, stillTracked := limiter.windows["key-0"]; stillTracked {
+		t.Fatalf("the oldest window (key-0) should have been evicted")
+	}
+	lastKey := "key-" + strconv.Itoa(limiterMaxKeys-1)
+	if allowed, _ := limiter.allow(lastKey); allowed {
+		t.Fatalf("a tracked key must keep its limit while the map is full")
 	}
 }

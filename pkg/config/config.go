@@ -44,6 +44,9 @@ type Config struct {
 // MinJWTSecretLength is the shortest accepted JWT_SECRET (bytes). HS256 is only as strong as its key.
 const MinJWTSecretLength = 32
 
+// MaxDelaySeconds bounds DELAY_MAX_SECONDS; the HTTP WriteTimeout is derived from it (+15s).
+const MaxDelaySeconds = 300
+
 // Validate fails loudly on a configuration that would start an insecure or broken server.
 func (c Config) Validate() error {
 	var problems []string
@@ -53,8 +56,9 @@ func (c Config) Validate() error {
 	if len(strings.TrimSpace(c.JWTSecret)) < MinJWTSecretLength {
 		problems = append(problems, fmt.Sprintf("JWT_SECRET must be at least %d characters", MinJWTSecretLength))
 	}
-	if c.DelayMaxSeconds <= 0 {
-		problems = append(problems, "DELAY_MAX_SECONDS must be greater than 0")
+	// NaN fails every comparison, so "!(x > 0)" rejects it together with zero and negatives.
+	if !(c.DelayMaxSeconds > 0) || c.DelayMaxSeconds > MaxDelaySeconds {
+		problems = append(problems, fmt.Sprintf("DELAY_MAX_SECONDS must be greater than 0 and at most %d", MaxDelaySeconds))
 	}
 	if c.LoginAttemptsPerMinute < 1 {
 		problems = append(problems, "AUTH_LOGIN_ATTEMPTS_PER_MINUTE must be at least 1")
@@ -99,6 +103,10 @@ func Parse() Config {
 
 	flag.Parse()
 
+	setFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	invalidEnv := envErrorsStillInEffect(defaults.invalidEnv, setFlags)
+
 	cfg := Config{
 		Port:               *port,
 		UIMessage:          *message,
@@ -123,7 +131,7 @@ func Parse() Config {
 		LoginAttemptsPerMinute: *loginAttemptsPerMinute,
 		RegistrationsPerMinute: *registrationsPerMinute,
 
-		invalidEnv: defaults.invalidEnv,
+		invalidEnv: invalidEnv,
 	}
 
 	return cfg
@@ -174,6 +182,26 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// flagForEnv maps each boolean environment variable to the flag that overrides it.
+var flagForEnv = map[string]string{
+	"CHAOS_ENABLED":             "chaos-enabled",
+	"PPROF_ENABLED":             "pprof-enabled",
+	"AUTH_REGISTRATION_ENABLED": "registration-enabled",
+}
+
+// envErrorsStillInEffect drops the invalid environment variables whose flag was given on the
+// command line: the flag overrides the variable, so its bad value no longer matters.
+func envErrorsStillInEffect(invalidEnv []string, setFlags map[string]bool) []string {
+	var inEffect []string
+	for _, key := range invalidEnv {
+		if flagName, hasFlag := flagForEnv[key]; hasFlag && setFlags[flagName] {
+			continue
+		}
+		inEffect = append(inEffect, key)
+	}
+	return inEffect
 }
 
 // envBool accepts the strconv.ParseBool spellings (true/false, 1/0, ...). Any other value is recorded

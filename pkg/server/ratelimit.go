@@ -26,8 +26,12 @@ type limiterWindow struct {
 
 const limiterWindowLength = time.Minute
 
-// limiterMaxKeys bounds memory: when reached, expired windows are dropped before a new key is added,
-// and if none has expired the new key is refused (fail closed). Callers also cap the key length.
+// limiterMaxKeys bounds memory. When it is reached, expired windows are dropped first; if every
+// window is still live, the oldest one is evicted to make room. Callers also cap the key length.
+//
+// Why evict and not refuse: refusing new keys would let anyone lock every user out of login by
+// cycling through 10 000 made-up usernames a minute. Evicting keeps login open for everyone; the
+// price for an attacker who wants more guesses on one account is 10 000 requests per extra window.
 const limiterMaxKeys = 10000
 
 func newFixedWindowLimiter(limit int) *fixedWindowLimiter {
@@ -50,9 +54,7 @@ func (l *fixedWindowLimiter) allow(key string) (bool, time.Duration) {
 		if !found && len(l.windows) >= limiterMaxKeys {
 			l.dropExpired(now)
 			if len(l.windows) >= limiterMaxKeys {
-				// Every slot is a live window: someone is cycling through keys. Refuse new keys
-				// until windows expire instead of growing without bound.
-				return false, limiterWindowLength
+				l.evictOldest()
 			}
 		}
 		window = limiterWindow{start: now}
@@ -65,6 +67,21 @@ func (l *fixedWindowLimiter) allow(key string) (bool, time.Duration) {
 	window.count++
 	l.windows[key] = window
 	return true, 0
+}
+
+// evictOldest removes the window that started first. O(n), and only runs while the map is full.
+func (l *fixedWindowLimiter) evictOldest() {
+	var oldestKey string
+	var oldestStart time.Time
+	first := true
+	for key, window := range l.windows {
+		if first || window.start.Before(oldestStart) {
+			oldestKey, oldestStart, first = key, window.start, false
+		}
+	}
+	if !first {
+		delete(l.windows, oldestKey)
+	}
 }
 
 func (l *fixedWindowLimiter) dropExpired(now time.Time) {
