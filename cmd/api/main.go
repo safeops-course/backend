@@ -68,6 +68,7 @@ func main() {
 			Addr:              cfg.PprofAddr,
 			Handler:           server.PprofHandler(),
 			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       5 * time.Second, // requests have no body; the long part is the response
 			IdleTimeout:       60 * time.Second,
 		}
 	}
