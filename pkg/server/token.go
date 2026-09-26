@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -112,45 +111,8 @@ func parseBearerToken(r *http.Request) (string, error) {
 	return tokenString, nil
 }
 
-// handleTokenGenerate godoc
-// @Summary      Generate JWT token
-// @Description  Creates a JWT token valid for configured TTL
-// @Tags         Auth
-// @Accept       plain
-// @Produce      json
-// @Param        body  body  string  false  "Username (defaults to 'anonymous')"
-// @Success      200  {object}  TokenResponse
-// @Failure      400  {string}  string  "Bad request"
-// @Failure      500  {string}  string  "Internal error"
-// @Router       /token [post]
-func (s *Server) handleTokenGenerate(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.logger.Ctx(r.Context()).Error("reading request body failed", zap.Error(err))
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	user := strings.TrimSpace(string(body))
-	if user == "" {
-		user = "anonymous"
-	}
-
-	t, expiresAt, err := s.issueToken(user)
-	if err != nil {
-		s.logger.Ctx(r.Context()).Error("signing token failed", zap.Error(err))
-		http.Error(w, "failed to generate token", http.StatusInternalServerError)
-		return
-	}
-
-	s.logger.Ctx(r.Context()).Info("token generated", zap.String("user", user))
-
-	respondJSON(w, http.StatusOK, TokenResponse{
-		Token:     t,
-		ExpiresAt: expiresAt,
-	})
-}
+// There is no endpoint that issues a token without a password: tokens come only from
+// POST /auth/login and POST /auth/register (auth_handlers.go).
 
 // handleTokenValidate godoc
 // @Summary      Validate JWT token

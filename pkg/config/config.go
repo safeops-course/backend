@@ -1,11 +1,13 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/ldbl/sre/backend/pkg/version"
 )
@@ -26,6 +28,47 @@ type Config struct {
 	JWTTokenTTLMinutes int    // Token TTL in minutes
 	DatabaseURL        string // Postgres DSN used for auth/app data
 	AuthDBPath         string // Fallback file path for local auth store
+
+	// Security switches. Every default is the safe one: a deployment has to opt in explicitly.
+	ChaosEnabled           bool    // /panic and readyz|livez enable|disable exist only when true
+	PprofEnabled           bool    // Go profiling on a separate listener (PprofAddr), never on the public router
+	PprofAddr              string  // Listen address of the profiling server; loopback by default
+	DelayMaxSeconds        float64 // Upper bound for /delay/{seconds}
+	RegistrationEnabled    bool    // POST /auth/register creates users only when true
+	LoginAttemptsPerMinute int     // Per username, per pod
+	RegistrationsPerMinute int     // For the whole pod
+
+	invalidEnv []string // boolean env vars with a value strconv.ParseBool rejects (reported by Validate)
+}
+
+// MinJWTSecretLength is the shortest accepted JWT_SECRET (bytes). HS256 is only as strong as its key.
+const MinJWTSecretLength = 32
+
+// Validate fails loudly on a configuration that would start an insecure or broken server.
+func (c Config) Validate() error {
+	var problems []string
+	for _, key := range c.invalidEnv {
+		problems = append(problems, key+" must be true or false")
+	}
+	if len(strings.TrimSpace(c.JWTSecret)) < MinJWTSecretLength {
+		problems = append(problems, fmt.Sprintf("JWT_SECRET must be at least %d characters", MinJWTSecretLength))
+	}
+	if c.DelayMaxSeconds <= 0 {
+		problems = append(problems, "DELAY_MAX_SECONDS must be greater than 0")
+	}
+	if c.LoginAttemptsPerMinute < 1 {
+		problems = append(problems, "AUTH_LOGIN_ATTEMPTS_PER_MINUTE must be at least 1")
+	}
+	if c.RegistrationsPerMinute < 1 {
+		problems = append(problems, "AUTH_REGISTRATIONS_PER_MINUTE must be at least 1")
+	}
+	if c.PprofEnabled && strings.TrimSpace(c.PprofAddr) == "" {
+		problems = append(problems, "PPROF_ADDR must be set when PPROF_ENABLED=true")
+	}
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // Parse reads configuration from environment variables and command-line flags.
@@ -46,6 +89,13 @@ func Parse() Config {
 	jwtTokenTTLMinutes := flag.Int("jwt-token-ttl-minutes", defaults.JWTTokenTTLMinutes, "JWT token TTL in minutes")
 	databaseURL := flag.String("database-url", defaults.DatabaseURL, "Postgres connection string used for auth store")
 	authDBPath := flag.String("auth-db-path", defaults.AuthDBPath, "Path to local fallback auth user store JSON file")
+	chaosEnabled := flag.Bool("chaos-enabled", defaults.ChaosEnabled, "Expose /panic and readiness/liveness toggles (authenticated)")
+	pprofEnabled := flag.Bool("pprof-enabled", defaults.PprofEnabled, "Serve Go profiling on pprof-addr")
+	pprofAddr := flag.String("pprof-addr", defaults.PprofAddr, "Listen address of the profiling server")
+	delayMaxSeconds := flag.Float64("delay-max-seconds", defaults.DelayMaxSeconds, "Upper bound for /delay/{seconds}")
+	registrationEnabled := flag.Bool("registration-enabled", defaults.RegistrationEnabled, "Allow POST /auth/register")
+	loginAttemptsPerMinute := flag.Int("login-attempts-per-minute", defaults.LoginAttemptsPerMinute, "Login attempts per username per minute (per pod)")
+	registrationsPerMinute := flag.Int("registrations-per-minute", defaults.RegistrationsPerMinute, "Registrations per minute (per pod)")
 
 	flag.Parse()
 
@@ -64,13 +114,24 @@ func Parse() Config {
 		JWTTokenTTLMinutes: *jwtTokenTTLMinutes,
 		DatabaseURL:        *databaseURL,
 		AuthDBPath:         *authDBPath,
+
+		ChaosEnabled:           *chaosEnabled,
+		PprofEnabled:           *pprofEnabled,
+		PprofAddr:              *pprofAddr,
+		DelayMaxSeconds:        *delayMaxSeconds,
+		RegistrationEnabled:    *registrationEnabled,
+		LoginAttemptsPerMinute: *loginAttemptsPerMinute,
+		RegistrationsPerMinute: *registrationsPerMinute,
+
+		invalidEnv: defaults.invalidEnv,
 	}
 
 	return cfg
 }
 
 func defaultConfig() Config {
-	return Config{
+	var invalidEnv []string
+	cfg := Config{
 		Port:               envInt("PORT", 8080),
 		UIMessage:          envString("UI_MESSAGE", "Welcome to the SRE control plane"),
 		UIColor:            envString("UI_COLOR", "#2E5CFF"),
@@ -85,7 +146,17 @@ func defaultConfig() Config {
 		JWTTokenTTLMinutes: envInt("JWT_TOKEN_TTL_MINUTES", 60),
 		DatabaseURL:        buildDatabaseURL(),
 		AuthDBPath:         envString("AUTH_DB_PATH", "/tmp/users.json"),
+
+		ChaosEnabled:           envBool("CHAOS_ENABLED", false, &invalidEnv),
+		PprofEnabled:           envBool("PPROF_ENABLED", false, &invalidEnv),
+		PprofAddr:              envString("PPROF_ADDR", "127.0.0.1:6060"),
+		DelayMaxSeconds:        envFloat("DELAY_MAX_SECONDS", 10),
+		RegistrationEnabled:    envBool("AUTH_REGISTRATION_ENABLED", true, &invalidEnv),
+		LoginAttemptsPerMinute: envInt("AUTH_LOGIN_ATTEMPTS_PER_MINUTE", 10),
+		RegistrationsPerMinute: envInt("AUTH_REGISTRATIONS_PER_MINUTE", 10),
 	}
+	cfg.invalidEnv = invalidEnv
+	return cfg
 }
 
 func envString(key, fallback string) string {
@@ -103,6 +174,21 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// envBool accepts the strconv.ParseBool spellings (true/false, 1/0, ...). Any other value is recorded
+// in invalid so Validate stops the start: "CHAOS_ENABLED=yes" must not silently mean the default.
+func envBool(key string, fallback bool, invalid *[]string) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		*invalid = append(*invalid, key)
+		return fallback
+	}
+	return parsed
 }
 
 func envFloat(key string, fallback float64) float64 {

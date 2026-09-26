@@ -48,9 +48,27 @@ func main() {
 
 	srv := server.New(cfg, log)
 
+	// Timeouts: without ReadHeaderTimeout a client can hold a connection open forever by sending
+	// headers one byte at a time (Slowloris). WriteTimeout leaves room for the longest /delay.
 	httpServer := &http.Server{
-		Addr:    cfg.Addr(),
-		Handler: srv.Handler(),
+		Addr:              cfg.Addr(),
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      time.Duration(cfg.DelayMaxSeconds*float64(time.Second)) + 15*time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
+
+	// Profiling runs on its own listener (loopback by default) and only when PPROF_ENABLED=true.
+	// No WriteTimeout: /debug/pprof/profile streams for ?seconds=N.
+	var pprofServer *http.Server
+	if cfg.PprofEnabled {
+		pprofServer = &http.Server{
+			Addr:              cfg.PprofAddr,
+			Handler:           server.PprofHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -63,12 +81,26 @@ func main() {
 		}
 	}()
 
+	if pprofServer != nil {
+		go func() {
+			log.Ctx(ctx).Warn("pprof enabled", zap.String("addr", cfg.PprofAddr))
+			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Ctx(ctx).Fatal("pprof server error", zap.Error(err))
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	log.Ctx(ctx).Info("shutdown signal received")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(shutdownCtx); err != nil {
+			log.Ctx(ctx).Error("pprof shutdown failed", zap.Error(err))
+		}
+	}
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Ctx(ctx).Fatal("graceful shutdown failed", zap.Error(err))
 	}
