@@ -126,7 +126,8 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 
 ## CI/CD
 
-- **build.yml** — on push to main/develop: build multi-platform Docker image (amd64+arm64), push to GHCR, Trivy scan
+- **pr.yml** — on every pull request (all must pass before merge): `go vet`, `go test -race`, `govulncheck` (pinned v1.8.0); golangci-lint v2.14.0 with gosec (`.golangci.yml`, every exclusion commented); `docker build` (no push); gitleaks v8.30.1 on the PR commits (`.gitleaks.toml`: only marked test canaries in `_test.go` are allowed)
+- **build.yml** — on push to main/develop: govulncheck, build the linux/amd64 image locally and **Trivy-scan it before anything is pushed** (blocking on fixable CRITICAL/HIGH), then build multi-platform (amd64+arm64), push to GHCR, cosign sign + SBOM attestation
 - **promote-production.yml** — manual: Trivy gate (blocking, CRITICAL only), re-tag staging image as production, create GitHub Release, bump version tag
 
 ## Coding Guidelines
@@ -138,4 +139,4 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 - Middleware order matters: RequestID → RealIP → Recoverer → CORS → OTel → Metrics → Logging → RandomBehavior
 - Version info is injected via ldflags — never hardcode versions
 - Docker image runs as non-root user `app` (uid 10001)
-- Trivy scans are non-blocking in CI (build), blocking for production promotion
+- Trivy blocks in CI before push (build.yml, fixable CRITICAL/HIGH) and again at production promotion

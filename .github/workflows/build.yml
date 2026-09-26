@@ -42,8 +42,7 @@ jobs:
 
       - name: Run govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -84,6 +83,40 @@ jobs:
           echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "full_tag=${ENV}-v${VERSION}-${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      # Scan BEFORE anything is pushed or signed (security review 2026-09-27): build the linux/amd64
+      # variant into the local Docker, scan it, and stop on a fixable CRITICAL/HIGH. The multi-platform
+      # push below reuses the same cache and build args, so its amd64 image has the same layers.
+      # Trade-off: the arm64 variant is not scanned on its own (same Dockerfile and base image tag).
+      # Trivy reads trivy.yaml / .trivyignore from the repo root if present; the inputs below win.
+      - name: Build image for the scan (linux/amd64, local only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: local-scan/backend:${{ github.sha }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ steps.meta.outputs.full_tag }}
+            COMMIT=${{ github.sha }}
+            APP_COMMIT=${{ github.sha }}
+            APP_COMMIT_SHORT=${{ steps.meta.outputs.short_sha }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Trivy scan (blocking, before push)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: local-scan/backend:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: "1"
 
       - name: Build and push Docker image
         id: build
@@ -129,16 +162,6 @@ jobs:
             --type spdxjson \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.full_tag }}
-          format: table
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: "0"
-
       - name: Output summary
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -153,6 +176,7 @@ jobs:
           echo "- \`${{ steps.meta.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Supply Chain:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy: no fixable CRITICAL/HIGH (scanned before push)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Cosign signature (keyless, GitHub OIDC)" >> $GITHUB_STEP_SUMMARY
           echo "- SBOM attestation (SPDX)" >> $GITHUB_STEP_SUMMARY
           echo "- govulncheck passed" >> $GITHUB_STEP_SUMMARY
