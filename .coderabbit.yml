@@ -46,7 +46,7 @@ reviews:
         Only flag hand edits, or handler annotation changes in pkg/server without a regenerated docs update.
     - path: "go.mod"
       instructions: |
-        - The `go` directive must match ARG GO_VERSION in Dockerfile and GO_VERSION in Makefile.
+        - The `go` directive must EQUAL ARG GO_VERSION in Dockerfile and GO_VERSION in Makefile (not just be <=): CI runs govulncheck with setup-go go-version-file: go.mod, so the scanned standard library is the go.mod version - a newer Dockerfile toolchain would ship a binary that was never scanned.
         - For dependency bumps, point out major-version jumps and known-vulnerable versions;
           CI runs govulncheck on every push to develop and main and fails the build on findings.
     - path: "Dockerfile"
