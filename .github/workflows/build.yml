@@ -84,10 +84,9 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "full_tag=${ENV}-v${VERSION}-${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      # Scan BEFORE anything is pushed or signed (security review 2026-09-27): build the linux/amd64
-      # variant into the local Docker, scan it, and stop on a fixable CRITICAL/HIGH. The multi-platform
-      # push below reuses the same cache and build args, so its amd64 image has the same layers.
-      # Trade-off: the arm64 variant is not scanned on its own (same Dockerfile and base image tag).
+      # Scan BEFORE anything is pushed or signed (security review 2026-09-27): build each published
+      # platform into the local Docker (one platform per load), scan it, and stop on a fixable
+      # CRITICAL/HIGH. The multi-platform push below reuses the same cache and build args.
       # Trivy reads trivy.yaml / .trivyignore from the repo root if present; the inputs below win.
       - name: Build image for the scan (linux/amd64, local only)
         uses: docker/build-push-action@v6
@@ -96,7 +95,7 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
-          tags: local-scan/backend:${{ github.sha }}
+          tags: local-scan/backend:${{ github.sha }}-amd64
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             APP_VERSION=${{ steps.meta.outputs.full_tag }}
@@ -108,10 +107,39 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-      - name: Trivy scan (blocking, before push)
+      - name: Trivy scan linux/amd64 (blocking, before push)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: local-scan/backend:${{ github.sha }}
+          image-ref: local-scan/backend:${{ github.sha }}-amd64
+          format: table
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Build image for the scan (linux/arm64, local only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: local-scan/backend:${{ github.sha }}-arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ steps.meta.outputs.full_tag }}
+            COMMIT=${{ github.sha }}
+            APP_COMMIT=${{ github.sha }}
+            APP_COMMIT_SHORT=${{ steps.meta.outputs.short_sha }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
+
+      - name: Trivy scan linux/arm64 (blocking, before push)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: local-scan/backend:${{ github.sha }}-arm64
           format: table
           severity: CRITICAL,HIGH
           vuln-type: os,library

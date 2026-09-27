@@ -137,7 +137,7 @@ reviewed and added there. Never print response bodies of /env in test failures (
 ## CI/CD
 
 - **pr.yml** — on every pull request (all must pass before merge): `go vet`, `go test -race`, `govulncheck` (pinned v1.8.0); golangci-lint v2.14.0 with gosec (`.golangci.yml`, every exclusion commented); `docker build` (no push); gitleaks v8.30.1 on the PR commits (`.gitleaks.toml`: only marked test canaries in `_test.go` are allowed)
-- **build.yml** — on push to main/develop: govulncheck, build the linux/amd64 image locally and **Trivy-scan it before anything is pushed** (blocking on fixable CRITICAL/HIGH), then build multi-platform (amd64+arm64), push to GHCR, cosign sign + SBOM attestation
+- **build.yml** — on push to main/develop: govulncheck, build each published platform (linux/amd64, linux/arm64) locally and **Trivy-scan it before anything is pushed** (blocking on fixable CRITICAL/HIGH), then build multi-platform (amd64+arm64), push to GHCR, cosign sign + SBOM attestation
 - **promote-production.yml** — manual: Trivy gate (blocking, CRITICAL only), re-tag staging image as production, create GitHub Release, bump version tag
 
 ## Coding Guidelines
