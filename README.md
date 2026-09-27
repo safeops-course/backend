@@ -102,7 +102,7 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 Two GitHub Actions workflows:
 
 - **pr.yml** — every pull request: vet, race tests, govulncheck, golangci-lint + gosec, docker build, gitleaks on the PR commits
-- **build.yml** — triggers on push to `main`/`develop`: Trivy scan of the linux/amd64 and linux/arm64 images **before** push (blocking), then builds multi-platform Docker image (linux/amd64 + linux/arm64), pushes to GHCR, signs and attests
+- **build.yml** — triggers on push to `main`/`develop`: builds linux/amd64 and linux/arm64 locally, Trivy-scans both (blocking, **before** anything is pushed), pushes exactly those scanned images and joins them into one multi-platform index, then signs it with cosign (keyless), attaches an SBOM attestation (SPDX) and SLSA build provenance (`actions/attest-build-provenance`, verify with `gh attestation verify`)
 - **promote-production.yml** — manual trigger: runs Trivy scan (blocking on CRITICAL), re-tags staging image as production, creates GitHub Release, bumps version tag
 
 Images are pushed to `ghcr.io/safeops-course/backend` with tags like `develop-v0.0.5-abc1234-1234567890`.
