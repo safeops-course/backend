@@ -1,0 +1,36 @@
+# golangci-lint v2. The standard linters (errcheck, govet, ineffassign, staticcheck, unused) plus gosec.
+# Every exclusion below says why; an exclusion is a reviewed decision, never a way to get CI green.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - gosec
+
+  settings:
+    errcheck:
+      exclude-functions:
+        # Deferred close of an HTTP request body: net/http closes it anyway; there is nothing to do
+        # with the error in a handler.
+        - (io.ReadCloser).Close
+        # Flushing the logger on exit: the process is ending, a failed flush cannot be reported.
+        - (*go.uber.org/zap.Logger).Sync
+
+  exclusions:
+    rules:
+      # math/rand drives the chaos features (random delay and error injection), not anything
+      # security-relevant; crypto/rand would add nothing.
+      - path: pkg/server/server\.go
+        linters: [gosec]
+        text: "G404"
+      # AUTH_DB_PATH is operator configuration, normalised into /tmp in server.New before it reaches
+      # the file store; the taint analysis cannot see that. Tech debt: the file store is the local
+      # fallback only (Postgres is used whenever DATABASE_URL/POSTGRES_* are set).
+      - path: pkg/server/auth_store\.go
+        linters: [gosec]
+        text: "G703"
+      # Tests plant fake secret values on purpose (e.g. the /env leak test checks they never come
+      # back); they are canaries, not credentials.
+      - path: _test\.go
+        linters: [gosec]
+        text: "G101"

@@ -1,0 +1,12 @@
+# gitleaks configuration: the default rules plus one narrow allowlist.
+[extend]
+useDefault = true
+
+# Tests plant fake secrets on purpose (e.g. the /env leak test checks they never come back).
+# Allowed only when BOTH hold: the file is a Go test AND the value carries one of the explicit
+# test markers below. A real-looking secret in a test, or a marker outside tests, is still reported.
+[[allowlists]]
+description = "Planted test canaries in Go tests"
+condition = "AND"
+paths = ['''_test\.go$''']
+regexes = ['''test-secret-''', '''must-not-leak''']

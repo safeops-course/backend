@@ -14,7 +14,7 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 - Swagger UI and OpenAPI 3 spec
 - JWT authentication with Postgres-backed user store
 - Multi-arch container image (amd64 + arm64) with Docker buildx and GitHub Actions
-- CVE scanning with Trivy (non-blocking in CI, blocking for production promotion)
+- CVE scanning with Trivy before the image is pushed (blocking on fixable CRITICAL/HIGH) and at production promotion
 - Go vulnerability scanning with govulncheck
 - Container image signing with Sigstore cosign (keyless, GitHub OIDC)
 - SBOM attestation (SPDX) embedded in the container image via cosign
@@ -101,7 +101,8 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 
 Two GitHub Actions workflows:
 
-- **build.yml** — triggers on push to `main`/`develop`: builds multi-platform Docker image (linux/amd64 + linux/arm64), pushes to GHCR, runs Trivy vulnerability scan (non-blocking)
+- **pr.yml** — every pull request: vet, race tests, govulncheck, golangci-lint + gosec, docker build, gitleaks on the PR commits
+- **build.yml** — triggers on push to `main`/`develop`: Trivy scan of the linux/amd64 and linux/arm64 images **before** push (blocking), then builds multi-platform Docker image (linux/amd64 + linux/arm64), pushes to GHCR, signs and attests
 - **promote-production.yml** — manual trigger: runs Trivy scan (blocking on CRITICAL), re-tags staging image as production, creates GitHub Release, bumps version tag
 
 Images are pushed to `ghcr.io/safeops-course/backend` with tags like `develop-v0.0.5-abc1234-1234567890`.
