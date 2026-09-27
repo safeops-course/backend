@@ -44,6 +44,13 @@ jobs:
         run: |
           go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
+      # The arm64 image runs RUN steps of its final stage (apk upgrade, ...) on this amd64 runner:
+      # that needs QEMU emulation. Without it a cache miss fails with "exec format error".
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -88,6 +95,7 @@ jobs:
       # platform into the local Docker (one platform per load), scan it, and stop on a fixable
       # CRITICAL/HIGH. The push below publishes exactly these two images.
       # Trivy reads trivy.yaml / .trivyignore from the repo root if present; the inputs below win.
+      # Each platform has its own GHA cache scope (a shared scope makes the builds overwrite each other).
       - name: Build image for the scan (linux/amd64, local only)
         uses: docker/build-push-action@v6
         with:
@@ -108,8 +116,8 @@ jobs:
             APP_COMMIT=${{ github.sha }}
             APP_COMMIT_SHORT=${{ steps.meta.outputs.short_sha }}
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
           platforms: linux/amd64
 
       - name: Trivy scan linux/amd64 (blocking, before push)
@@ -142,8 +150,8 @@ jobs:
             APP_COMMIT=${{ github.sha }}
             APP_COMMIT_SHORT=${{ steps.meta.outputs.short_sha }}
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
           platforms: linux/arm64
 
       - name: Trivy scan linux/arm64 (blocking, before push)
