@@ -1,6 +1,6 @@
 basePath: /
 definitions:
-  pkg_server.ConfigsResponse:
+  server.ConfigsResponse:
     properties:
       configs:
         additionalProperties:
@@ -15,13 +15,13 @@ definitions:
         example: /etc/config
         type: string
     type: object
-  pkg_server.DelayResponse:
+  server.DelayResponse:
     properties:
       delay:
         example: "5"
         type: string
     type: object
-  pkg_server.ErrorResponse:
+  server.ErrorResponse:
     properties:
       error:
         example: test error
@@ -33,20 +33,13 @@ definitions:
         example: error log generated
         type: string
     type: object
-  pkg_server.StatusResponse:
+  server.StatusResponse:
     properties:
       status:
         example: ok
         type: string
     type: object
-  pkg_server.TokenResponse:
-    properties:
-      expires_at:
-        type: string
-      token:
-        type: string
-    type: object
-  pkg_server.TokenValidationResponse:
+  server.TokenValidationResponse:
     properties:
       expires_at:
         type: string
@@ -55,11 +48,16 @@ definitions:
       token_name:
         type: string
     type: object
-  pkg_server.VersionResponse:
+  server.VersionResponse:
     properties:
       build_time:
         example: "2024-01-01T00:00:00Z"
         type: string
+      chaos_enabled:
+        description: ChaosEnabled tells the UI whether /panic and the probe toggles
+          exist (CHAOS_ENABLED).
+        example: false
+        type: boolean
       commit:
         example: abc1234567890
         type: string
@@ -106,13 +104,14 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.ConfigsResponse'
+            $ref: '#/definitions/server.ConfigsResponse'
       summary: Config watcher values
       tags:
       - Config
   /delay/{seconds}:
     get:
-      description: Delays the response by the specified number of seconds
+      description: Delays the response by the specified number of seconds (0 to DELAY_MAX_SECONDS,
+        default 10). Stops early when the client disconnects.
       parameters:
       - description: Delay in seconds
         in: path
@@ -125,7 +124,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.DelayResponse'
+            $ref: '#/definitions/server.DelayResponse'
         "400":
           description: Invalid delay
           schema:
@@ -137,7 +136,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Returns the request body as-is
+      description: Returns the request body as-is, always as application/octet-stream
+        (never rendered by a browser)
       parameters:
       - description: Request body to echo
         in: body
@@ -145,7 +145,7 @@ paths:
         schema:
           type: string
       produces:
-      - application/json
+      - application/octet-stream
       responses:
         "200":
           description: Echoed body
@@ -162,7 +162,8 @@ paths:
       - Debug
   /env:
     get:
-      description: Returns all environment variables (use with caution in production)
+      description: Returns only non-secret runtime variables (pod, namespace, environment,
+        version, FEATURE_* flags). Secrets are never returned.
       produces:
       - application/json
       responses:
@@ -172,7 +173,7 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Environment variables
+      summary: Runtime environment (allowlisted)
       tags:
       - Debug
   /error:
@@ -184,7 +185,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.ErrorResponse'
+            $ref: '#/definitions/server.ErrorResponse'
         "400":
           description: Invalid level
           schema:
@@ -192,7 +193,7 @@ paths:
         "500":
           description: Error level generates 500
           schema:
-            $ref: '#/definitions/pkg_server.ErrorResponse'
+            $ref: '#/definitions/server.ErrorResponse'
       summary: Generate test logs
       tags:
       - Observability
@@ -211,7 +212,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.ErrorResponse'
+            $ref: '#/definitions/server.ErrorResponse'
         "400":
           description: Invalid level
           schema:
@@ -219,7 +220,7 @@ paths:
         "500":
           description: Error level generates 500
           schema:
-            $ref: '#/definitions/pkg_server.ErrorResponse'
+            $ref: '#/definitions/server.ErrorResponse'
       summary: Generate test logs
       tags:
       - Observability
@@ -247,7 +248,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Health check
       tags:
       - Health
@@ -260,11 +261,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
         "503":
           description: Service Unavailable
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Liveness probe
       tags:
       - Health
@@ -277,7 +278,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Disable liveness
       tags:
       - Health
@@ -290,7 +291,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Enable liveness
       tags:
       - Health
@@ -330,7 +331,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Terminate process
       tags:
       - Chaos
@@ -343,11 +344,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
         "503":
           description: Service Unavailable
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Readiness probe
       tags:
       - Health
@@ -360,7 +361,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Disable readiness
       tags:
       - Health
@@ -373,7 +374,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.StatusResponse'
+            $ref: '#/definitions/server.StatusResponse'
       summary: Enable readiness
       tags:
       - Health
@@ -400,48 +401,6 @@ paths:
       summary: Return specific HTTP status
       tags:
       - Chaos
-  /swagger:
-    get:
-      description: Returns Swagger UI HTML page
-      produces:
-      - text/html
-      responses:
-        "200":
-          description: HTML page
-          schema:
-            type: string
-      summary: Swagger UI
-      tags:
-      - Documentation
-  /token:
-    post:
-      consumes:
-      - text/plain
-      description: Creates a JWT token valid for 5 minutes
-      parameters:
-      - description: Username (defaults to 'anonymous')
-        in: body
-        name: body
-        schema:
-          type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/pkg_server.TokenResponse'
-        "400":
-          description: Bad request
-          schema:
-            type: string
-        "500":
-          description: Internal error
-          schema:
-            type: string
-      summary: Generate JWT token
-      tags:
-      - Auth
   /token/validate:
     get:
       description: Validates a JWT token from the Authorization header
@@ -451,7 +410,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.TokenValidationResponse'
+            $ref: '#/definitions/server.TokenValidationResponse'
         "401":
           description: Unauthorized
           schema:
@@ -470,7 +429,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/pkg_server.VersionResponse'
+            $ref: '#/definitions/server.VersionResponse'
       summary: Version info
       tags:
       - General

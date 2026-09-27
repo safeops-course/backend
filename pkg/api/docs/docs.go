@@ -57,7 +57,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.ConfigsResponse"
+                            "$ref": "#/definitions/server.ConfigsResponse"
                         }
                     }
                 }
@@ -65,7 +65,7 @@ const docTemplate = `{
         },
         "/delay/{seconds}": {
             "get": {
-                "description": "Delays the response by the specified number of seconds",
+                "description": "Delays the response by the specified number of seconds (0 to DELAY_MAX_SECONDS, default 10). Stops early when the client disconnects.",
                 "produces": [
                     "application/json"
                 ],
@@ -86,7 +86,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.DelayResponse"
+                            "$ref": "#/definitions/server.DelayResponse"
                         }
                     },
                     "400": {
@@ -100,12 +100,12 @@ const docTemplate = `{
         },
         "/echo": {
             "post": {
-                "description": "Returns the request body as-is",
+                "description": "Returns the request body as-is, always as application/octet-stream (never rendered by a browser)",
                 "consumes": [
                     "application/json"
                 ],
                 "produces": [
-                    "application/json"
+                    "application/octet-stream"
                 ],
                 "tags": [
                     "Debug"
@@ -142,14 +142,14 @@ const docTemplate = `{
         },
         "/env": {
             "get": {
-                "description": "Returns all environment variables (use with caution in production)",
+                "description": "Returns only non-secret runtime variables (pod, namespace, environment, version, FEATURE_* flags). Secrets are never returned.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Debug"
                 ],
-                "summary": "Environment variables",
+                "summary": "Runtime environment (allowlisted)",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -177,7 +177,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.ErrorResponse"
+                            "$ref": "#/definitions/server.ErrorResponse"
                         }
                     },
                     "400": {
@@ -189,7 +189,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Error level generates 500",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.ErrorResponse"
+                            "$ref": "#/definitions/server.ErrorResponse"
                         }
                     }
                 }
@@ -218,7 +218,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.ErrorResponse"
+                            "$ref": "#/definitions/server.ErrorResponse"
                         }
                     },
                     "400": {
@@ -230,7 +230,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Error level generates 500",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.ErrorResponse"
+                            "$ref": "#/definitions/server.ErrorResponse"
                         }
                     }
                 }
@@ -273,7 +273,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -293,13 +293,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -319,7 +319,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -339,7 +339,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -400,7 +400,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -420,13 +420,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -446,7 +446,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -466,7 +466,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.StatusResponse"
+                            "$ref": "#/definitions/server.StatusResponse"
                         }
                     }
                 }
@@ -507,71 +507,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/swagger": {
-            "get": {
-                "description": "Returns Swagger UI HTML page",
-                "produces": [
-                    "text/html"
-                ],
-                "tags": [
-                    "Documentation"
-                ],
-                "summary": "Swagger UI",
-                "responses": {
-                    "200": {
-                        "description": "HTML page",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
-        "/token": {
-            "post": {
-                "description": "Creates a JWT token valid for 5 minutes",
-                "consumes": [
-                    "text/plain"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Auth"
-                ],
-                "summary": "Generate JWT token",
-                "parameters": [
-                    {
-                        "description": "Username (defaults to 'anonymous')",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/pkg_server.TokenResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad request",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal error",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
         "/token/validate": {
             "get": {
                 "security": [
@@ -591,7 +526,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.TokenValidationResponse"
+                            "$ref": "#/definitions/server.TokenValidationResponse"
                         }
                     },
                     "401": {
@@ -617,7 +552,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/pkg_server.VersionResponse"
+                            "$ref": "#/definitions/server.VersionResponse"
                         }
                     }
                 }
@@ -625,7 +560,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "pkg_server.ConfigsResponse": {
+        "server.ConfigsResponse": {
             "type": "object",
             "properties": {
                 "configs": {
@@ -647,7 +582,7 @@ const docTemplate = `{
                 }
             }
         },
-        "pkg_server.DelayResponse": {
+        "server.DelayResponse": {
             "type": "object",
             "properties": {
                 "delay": {
@@ -656,7 +591,7 @@ const docTemplate = `{
                 }
             }
         },
-        "pkg_server.ErrorResponse": {
+        "server.ErrorResponse": {
             "type": "object",
             "properties": {
                 "error": {
@@ -673,7 +608,7 @@ const docTemplate = `{
                 }
             }
         },
-        "pkg_server.StatusResponse": {
+        "server.StatusResponse": {
             "type": "object",
             "properties": {
                 "status": {
@@ -682,18 +617,7 @@ const docTemplate = `{
                 }
             }
         },
-        "pkg_server.TokenResponse": {
-            "type": "object",
-            "properties": {
-                "expires_at": {
-                    "type": "string"
-                },
-                "token": {
-                    "type": "string"
-                }
-            }
-        },
-        "pkg_server.TokenValidationResponse": {
+        "server.TokenValidationResponse": {
             "type": "object",
             "properties": {
                 "expires_at": {
@@ -707,12 +631,17 @@ const docTemplate = `{
                 }
             }
         },
-        "pkg_server.VersionResponse": {
+        "server.VersionResponse": {
             "type": "object",
             "properties": {
                 "build_time": {
                     "type": "string",
                     "example": "2024-01-01T00:00:00Z"
+                },
+                "chaos_enabled": {
+                    "description": "ChaosEnabled tells the UI whether /panic and the probe toggles exist (CHAOS_ENABLED).",
+                    "type": "boolean",
+                    "example": false
                 },
                 "commit": {
                     "type": "string",
