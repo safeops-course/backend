@@ -13,7 +13,7 @@ import (
 )
 
 // testJWTSecret is long enough for config.Validate (MinJWTSecretLength).
-const testJWTSecret = "test-secret-0123456789abcdefghijklmnop"
+const testJWTSecret = "test-secret-0123456789abcdefghijklmnop" // gitleaks:allow (fake, test only)
 
 // newTestServer builds a server with safe defaults (chaos off, registration on);
 // options change the config before New validates it.

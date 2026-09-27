@@ -21,7 +21,7 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 - Supply chain verification with Kyverno policies (signature + attestation)
 - Non-root container (uid 10001) with read-only root filesystem
 - Kustomize-based deployment with per-environment overlays
-- Canary deployments with Flagger (develop environment)
+- Canary deployments with Flagger (develop, opt-in: switched on in the course's advanced chapter)
 - HPA auto-scaling (develop environment)
 
 ## Endpoints
@@ -76,13 +76,13 @@ exposes before adding it there.
 | `CHAOS_ENABLED` | `false` | Expose `/panic` and the readiness/liveness toggles (still need a token) |
 | `PPROF_ENABLED` | `false` | Serve `/debug/pprof/*` on `PPROF_ADDR` |
 | `PPROF_ADDR` | `127.0.0.1:6060` | Profiling listener (loopback: reach it with `kubectl port-forward`) |
-| `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` (1..300; the HTTP write timeout is this + 15s) |
+| `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` (greater than 0, at most 300; the HTTP write timeout is this + 15s) |
 | `AUTH_REGISTRATION_ENABLED` | `true` | Allow `POST /auth/register` |
 | `AUTH_LOGIN_ATTEMPTS_PER_MINUTE` | `10` | Login attempts per username per minute, per pod |
 | `AUTH_REGISTRATIONS_PER_MINUTE` | `10` | Registrations per minute, per pod |
 
 Invalid values fail loudly: a short `JWT_SECRET`, a boolean that is not `true`/`false` (unless its
-flag overrides it), a zero limit or a `DELAY_MAX_SECONDS` outside 1..300 stops the start with a
+flag overrides it), a zero limit, or a `DELAY_MAX_SECONDS` of 0 or less or greater than 300, stops the start with a
 message naming the variable.
 
 Rate limits: when 10 000 keys are tracked, the oldest window is evicted - login never locks out
@@ -111,7 +111,7 @@ Images are pushed to `ghcr.io/safeops-course/backend` with tags like `develop-v0
 
 Deployed via FluxCD with environment overlays:
 
-- **develop** — 1 replica, minimal resources, HPA, Flagger canary
+- **develop** — 1 replica, minimal resources, HPA (Flagger canary opt-in, see the sre repo)
 - **staging** — 1 replica, moderate resources
 - **production** — 2 replicas, higher resource limits
 
