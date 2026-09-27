@@ -28,6 +28,8 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      attestations: write   # SLSA build provenance (actions/attest-build-provenance)
+      artifact-metadata: write  # its storage record (registry link); without it only a warning
 
     steps:
       - name: Checkout code
@@ -191,6 +193,16 @@ jobs:
           [[ "${digest}" == sha256:* ]] || { echo "::error::no digest for ${REPO}:${FULL_TAG}"; exit 1; }
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
+      # SLSA build provenance for exactly the published index. BuildKit's own provenance is not carried
+      # when the scanned, loaded images are pushed, so GitHub signs one (Sigstore, GitHub OIDC) and
+      # pushes it to the registry next to the image. Verify: gh attestation verify oci://<image> --owner safeops-course
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
       - name: Sign image with cosign (keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -225,4 +237,5 @@ jobs:
           echo "- Trivy: no fixable CRITICAL/HIGH (scanned before push)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Cosign signature (keyless, GitHub OIDC)" >> $GITHUB_STEP_SUMMARY
           echo "- SBOM attestation (SPDX)" >> $GITHUB_STEP_SUMMARY
+          echo "- SLSA build provenance (GitHub attestation)" >> "$GITHUB_STEP_SUMMARY"
           echo "- govulncheck passed" >> $GITHUB_STEP_SUMMARY
