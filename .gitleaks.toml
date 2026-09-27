@@ -1,0 +1,11 @@
+# gitleaks configuration: the default rules, no allowlist.
+[extend]
+useDefault = true
+
+# Planted test secrets are allowed one line at a time with an inline `gitleaks:allow` comment
+# (today only testJWTSecret in pkg/server/server_test.go), so any other secret - in a test or not -
+# is still reported.
+#
+# Do NOT add a path-based [[allowlists]] entry. Verified with gitleaks 8.30.1 (2026-09-27): an
+# allowlist with `condition = "AND"`, `paths = ['_test\.go$']` and an anchored regex behaved like
+# the paths alone - a random 40-hex API token planted in a _test.go file was not reported.

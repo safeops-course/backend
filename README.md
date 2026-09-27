@@ -14,14 +14,14 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 - Swagger UI and OpenAPI 3 spec
 - JWT authentication with Postgres-backed user store
 - Multi-arch container image (amd64 + arm64) with Docker buildx and GitHub Actions
-- CVE scanning with Trivy (non-blocking in CI, blocking for production promotion)
+- CVE scanning with Trivy before the image is pushed (blocking on fixable CRITICAL/HIGH) and at production promotion
 - Go vulnerability scanning with govulncheck
 - Container image signing with Sigstore cosign (keyless, GitHub OIDC)
 - SBOM attestation (SPDX) embedded in the container image via cosign
 - Supply chain verification with Kyverno policies (signature + attestation)
 - Non-root container (uid 10001) with read-only root filesystem
 - Kustomize-based deployment with per-environment overlays
-- Canary deployments with Flagger (develop environment)
+- Canary deployments with Flagger (develop, opt-in: switched on in the course's advanced chapter)
 - HPA auto-scaling (develop environment)
 
 ## Endpoints
@@ -31,25 +31,30 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 | `/` | GET | HTML landing page with build metadata |
 | `/healthz` | GET | Liveness-style health check |
 | `/readyz` | GET | Readiness status |
-| `/readyz/enable`, `/readyz/disable` | PUT | Toggle readiness (auth required) |
+| `/readyz/enable`, `/readyz/disable` | PUT | Toggle readiness (`CHAOS_ENABLED=true` + auth) |
 | `/livez` | GET | Liveness status |
-| `/livez/enable`, `/livez/disable` | PUT | Toggle liveness (auth required) |
-| `/version` | GET | Build version, commit, and timestamp |
-| `/env` | GET | Server-side environment variables (sanitized) |
+| `/livez/enable`, `/livez/disable` | PUT | Toggle liveness (`CHAOS_ENABLED=true` + auth) |
+| `/version` | GET | Build version, commit, timestamp, `chaos_enabled` |
+| `/env` | GET | Allowlisted runtime variables only (pod, namespace, environment, version, `FEATURE_*`) - never secrets |
 | `/headers` | GET | Request headers (for debugging) |
-| `/echo` | POST | Echo request body and metadata |
-| `/configs` | GET | Current ConfigMap/Secret values |
+| `/echo` | POST | Echo request body (always `application/octet-stream`) |
+| `/configs` | GET | Current values of the watched ConfigMap (`CONFIG_PATH`) - never point it at a Secret |
 | `/status/{code}` | GET | Return a specific HTTP status code |
-| `/delay/{seconds}` | GET | Add a fixed delay before responding |
+| `/delay/{seconds}` | GET | Delay 0..`DELAY_MAX_SECONDS` seconds (stops when the client leaves) |
 | `/error/{level}` | GET | Log at specified level (debug/info/warn/error) |
-| `/panic` | GET | Force a panic (chaos test, auth required) |
+| `/panic` | GET | Exit the process with code 255 (`CHAOS_ENABLED=true` + auth) |
 | `/metrics` | GET | Prometheus metrics (custom registry) |
 | `/openapi` | GET | OpenAPI 3 JSON spec |
 | `/swagger/*` | GET | Swagger UI |
-| `/debug/pprof/*` | GET | Go profiling endpoints |
-| `/auth/register` | POST | Create user and return JWT |
-| `/auth/login` | POST | Login and return JWT |
+| `/auth/register` | POST | Create user and return JWT (`AUTH_REGISTRATION_ENABLED`, rate limited) |
+| `/auth/login` | POST | Login and return JWT (rate limited per username) |
 | `/auth/me` | GET | Return current authenticated user |
+| `/token/validate` | GET | Validate a bearer token |
+
+There is no endpoint that issues a token without a password, and Go profiling is not on this
+router: with `PPROF_ENABLED=true` it listens on `PPROF_ADDR` (loopback) - use `kubectl port-forward`.
+`TestRouteInventory` fails when a route is added without updating its list: review what a new route
+exposes before adding it there.
 
 ## Runtime Configuration
 
@@ -60,14 +65,28 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 | `UI_COLOR` | `#2E5CFF` | Accent color |
 | `RANDOM_DELAY_MAX` | `0` | Max random delay per request (ms) |
 | `RANDOM_ERROR_RATE` | `0` | Probability 0–1 of injecting HTTP 500 |
-| `CONFIG_PATH` | | Directory to watch for ConfigMap changes |
-| `JWT_SECRET` | `change-me-in-production` | HMAC-SHA256 signing secret |
+| `CONFIG_PATH` | | Directory to watch for ConfigMap changes (values are served on `/configs`) |
+| `JWT_SECRET` | (required) | HMAC-SHA256 signing secret, at least 32 characters - the server does not start without it |
 | `JWT_TOKEN_TTL_MINUTES` | `60` | Token expiry |
 | `DEPLOYMENT_ENVIRONMENT` | | `production`/`staging` = JSON logging |
 | `UPTRACE_DSN` | | Uptrace exporter DSN |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD` | | CloudNativePG credentials |
 | `POSTGRES_HOST` | | Postgres host (e.g. `app-postgres-rw`) |
 | `POSTGRES_DB` | `app` | Database name |
+| `CHAOS_ENABLED` | `false` | Expose `/panic` and the readiness/liveness toggles (still need a token) |
+| `PPROF_ENABLED` | `false` | Serve `/debug/pprof/*` on `PPROF_ADDR` |
+| `PPROF_ADDR` | `127.0.0.1:6060` | Profiling listener (loopback: reach it with `kubectl port-forward`) |
+| `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` (greater than 0, at most 300; the HTTP write timeout is this + 15s) |
+| `AUTH_REGISTRATION_ENABLED` | `true` | Allow `POST /auth/register` |
+| `AUTH_LOGIN_ATTEMPTS_PER_MINUTE` | `10` | Login attempts per username per minute, per pod |
+| `AUTH_REGISTRATIONS_PER_MINUTE` | `10` | Registrations per minute, per pod |
+
+Invalid values fail loudly: a short `JWT_SECRET`, a boolean that is not `true`/`false` (unless its
+flag overrides it), a zero limit, or a `DELAY_MAX_SECONDS` of 0 or less or greater than 300, stops the start with a
+message naming the variable.
+
+Rate limits: when 10 000 keys are tracked, the oldest window is evicted - login never locks out
+everyone; more guesses on one account cost an attacker 10 000 requests per extra window.
 
 Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`) is injected via ldflags at build time.
 
@@ -76,13 +95,14 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 - **Metrics** — Prometheus via custom registry at `/metrics`
 - **Tracing** — OpenTelemetry SDK with Uptrace exporter, automatic HTTP instrumentation via `otelhttp`
 - **Logging** — Structured logging with `otelzap` (JSON in production, console in development)
-- **ConfigWatch** — `fsnotify`-based hot-reload for mounted ConfigMaps and Secrets
+- **ConfigWatch** — `fsnotify`-based hot-reload for a mounted ConfigMap (its values are public on `/configs`)
 
 ## CI/CD
 
 Two GitHub Actions workflows:
 
-- **build.yml** — triggers on push to `main`/`develop`: builds multi-platform Docker image (linux/amd64 + linux/arm64), pushes to GHCR, runs Trivy vulnerability scan (non-blocking)
+- **pr.yml** — every pull request: vet, race tests, govulncheck, golangci-lint + gosec, docker build, gitleaks on the PR commits
+- **build.yml** — triggers on push to `main`/`develop`: Trivy scan of the linux/amd64 and linux/arm64 images **before** push (blocking), then builds multi-platform Docker image (linux/amd64 + linux/arm64), pushes to GHCR, signs and attests
 - **promote-production.yml** — manual trigger: runs Trivy scan (blocking on CRITICAL), re-tags staging image as production, creates GitHub Release, bumps version tag
 
 Images are pushed to `ghcr.io/safeops-course/backend` with tags like `develop-v0.0.5-abc1234-1234567890`.
@@ -91,7 +111,7 @@ Images are pushed to `ghcr.io/safeops-course/backend` with tags like `develop-v0
 
 Deployed via FluxCD with environment overlays:
 
-- **develop** — 1 replica, minimal resources, HPA, Flagger canary
+- **develop** — 1 replica, minimal resources, HPA (Flagger canary opt-in, see the sre repo)
 - **staging** — 1 replica, moderate resources
 - **production** — 2 replicas, higher resource limits
 

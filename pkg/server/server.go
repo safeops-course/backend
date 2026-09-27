@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/http/pprof"
@@ -52,6 +53,9 @@ type Server struct {
 	indexTmpl     *template.Template
 	configWatcher *configwatch.Watcher
 	users         authUserStore
+
+	loginLimiter        *fixedWindowLimiter
+	registrationLimiter *fixedWindowLimiter
 }
 
 // New constructs a fully configured HTTP server.
@@ -65,12 +69,15 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		logger:   logger,
 		registry: prometheus.NewRegistry(),
 		randSrc:  rand.New(rand.NewSource(time.Now().UnixNano())),
+
+		loginLimiter:        newFixedWindowLimiter(cfg.LoginAttemptsPerMinute),
+		registrationLimiter: newFixedWindowLimiter(cfg.RegistrationsPerMinute),
 	}
 	s.ready.Store(true)
 	s.live.Store(true)
 
-	if strings.TrimSpace(cfg.JWTSecret) == "" {
-		logger.Fatal("JWT_SECRET must be set")
+	if err := cfg.Validate(); err != nil {
+		logger.Fatal("invalid configuration", zap.Error(err))
 	}
 
 	if strings.TrimSpace(cfg.DatabaseURL) != "" {
@@ -159,11 +166,11 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		}
 	}
 
+	// No RealIP: nothing here needs the client IP, and X-Forwarded-For is whatever the caller sends.
+	// No CORS: browsers reach the API same-origin through the frontend nginx (/api/).
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	r.Use(s.corsMiddleware)
 	r.Use(telemetry.HTTPMiddleware)
 	r.Use(s.metricsMiddleware)
 	r.Use(s.loggingMiddleware)
@@ -187,33 +194,25 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		httpSwagger.URL("/swagger/doc.json"),
 	))
 	r.Get("/configs", s.handleConfigs)
-	r.Post("/token", s.handleTokenGenerate)
 	r.Get("/token/validate", s.handleTokenValidate)
 	r.Post("/auth/register", s.handleAuthRegister)
 	r.Post("/auth/login", s.handleAuthLogin)
 	r.With(s.authMiddleware).Get("/auth/me", s.handleAuthMe)
 
-	r.Group(func(protected chi.Router) {
-		protected.Use(s.authMiddleware)
-		protected.Put("/readyz/enable", s.handleReadyEnable)
-		protected.Put("/readyz/disable", s.handleReadyDisable)
-		protected.Put("/livez/enable", s.handleLiveEnable)
-		protected.Put("/livez/disable", s.handleLiveDisable)
-		protected.Get("/panic", s.handlePanic)
-	})
+	// Chaos endpoints change the state of the pod (not ready, not live, exit). They exist only
+	// when CHAOS_ENABLED=true and still need a valid token; with chaos off they are plain 404s.
+	if cfg.ChaosEnabled {
+		r.Group(func(protected chi.Router) {
+			protected.Use(s.authMiddleware)
+			protected.Put("/readyz/enable", s.handleReadyEnable)
+			protected.Put("/readyz/disable", s.handleReadyDisable)
+			protected.Put("/livez/enable", s.handleLiveEnable)
+			protected.Put("/livez/disable", s.handleLiveDisable)
+			protected.Get("/panic", s.handlePanic)
+		})
+	}
 
-	// pprof endpoints for profiling
-	r.HandleFunc("/debug/pprof/", pprof.Index)
-	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-	r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-	r.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
-	r.Handle("/debug/pprof/block", pprof.Handler("block"))
-	r.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
-	r.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+	// Profiling is not on this router: see PprofHandler (separate listener, PPROF_ENABLED).
 
 	s.router = r
 	return s
@@ -241,24 +240,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	return shutdownErr
-}
-
-func (s *Server) corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow CORS for frontend
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, traceparent, tracestate, baggage")
-		w.Header().Set("Access-Control-Expose-Headers", "traceparent, tracestate, baggage")
-
-		// Handle preflight requests
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (s *Server) metricsMiddleware(next http.Handler) http.Handler {
@@ -460,17 +441,53 @@ func (s *Server) handleLiveDisable(w http.ResponseWriter, r *http.Request) {
 // @Success      200  {object}  VersionResponse
 // @Router       /version [get]
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]string{
-		"version":      s.cfg.Version,
-		"commit":       s.cfg.Commit,
-		"commit_short": s.cfg.CommitShort,
-		"build_time":   s.cfg.BuildDate,
+	respondJSON(w, http.StatusOK, VersionResponse{
+		Version:      s.cfg.Version,
+		Commit:       s.cfg.Commit,
+		CommitShort:  s.cfg.CommitShort,
+		BuildTime:    s.cfg.BuildDate,
+		ChaosEnabled: s.cfg.ChaosEnabled,
 	})
 }
 
+// publicEnvKeys is the complete list of environment variables /env may return. It is an
+// allowlist on purpose: the pod environment holds JWT_SECRET, POSTGRES_PASSWORD, UPTRACE_DSN and
+// OTEL_EXPORTER_OTLP_HEADERS, and a denylist would leak the next secret someone adds.
+// Adding a key here makes it public on the internet - only non-secret runtime facts belong here.
+var publicEnvKeys = []string{
+	"HOSTNAME",
+	"NAMESPACE",
+	"ENVIRONMENT",
+	"DEPLOYMENT_ENVIRONMENT",
+	"SERVICE_NAME",
+	"SERVICE_VERSION",
+	"LOG_LEVEL",
+	"APP_VERSION",
+	"APP_COMMIT",
+	"APP_COMMIT_SHORT",
+	"APP_BUILD_DATE",
+}
+
+// publicEnvPrefixes: feature flags are meant to be visible (the course toggles them from a ConfigMap).
+var publicEnvPrefixes = []string{"FEATURE_"}
+
+func isPublicEnvKey(key string) bool {
+	for _, allowed := range publicEnvKeys {
+		if key == allowed {
+			return true
+		}
+	}
+	for _, prefix := range publicEnvPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleEnv godoc
-// @Summary      Environment variables
-// @Description  Returns all environment variables (use with caution in production)
+// @Summary      Runtime environment (allowlisted)
+// @Description  Returns only non-secret runtime variables (pod, namespace, environment, version, FEATURE_* flags). Secrets are never returned.
 // @Tags         Debug
 // @Produce      json
 // @Success      200  {object}  map[string]string
@@ -478,9 +495,9 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {
 	env := make(map[string]string)
 	for _, kv := range os.Environ() {
-		parts := strings.SplitN(kv, "=", 2)
-		if len(parts) == 2 {
-			env[parts[0]] = parts[1]
+		key, value, found := strings.Cut(kv, "=")
+		if found && isPublicEnvKey(key) {
+			env[key] = value
 		}
 	}
 	respondJSON(w, http.StatusOK, env)
@@ -503,10 +520,10 @@ func (s *Server) handleHeaders(w http.ResponseWriter, r *http.Request) {
 
 // handleEcho godoc
 // @Summary      Echo request body
-// @Description  Returns the request body as-is
+// @Description  Returns the request body as-is, always as application/octet-stream (never rendered by a browser)
 // @Tags         Debug
 // @Accept       json
-// @Produce      json
+// @Produce      octet-stream
 // @Param        body  body  string  false  "Request body to echo"
 // @Success      200  {string}  string  "Echoed body"
 // @Success      204  "Empty body"
@@ -519,7 +536,10 @@ func (s *Server) handleEcho(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", r.Header.Get("Content-Type"))
+	// A fixed type, not the caller's Content-Type: echoing "text/html" would let a crafted request
+	// render attacker HTML on our origin.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if len(body) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -545,12 +565,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(fmt.Sprintf("status forced to %d\n", code)))
+	// Best effort: the status is already sent; a failed body write (client gone) changes nothing.
+	_, _ = fmt.Fprintf(w, "status forced to %d\n", code)
 }
 
 // handleDelay godoc
 // @Summary      Delay response
-// @Description  Delays the response by the specified number of seconds
+// @Description  Delays the response by the specified number of seconds (0 to DELAY_MAX_SECONDS, default 10). Stops early when the client disconnects.
 // @Tags         Chaos
 // @Produce      json
 // @Param        seconds  path  number  true  "Delay in seconds"
@@ -560,12 +581,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDelay(w http.ResponseWriter, r *http.Request) {
 	secondsParam := chi.URLParam(r, "seconds")
 	delaySeconds, err := strconv.ParseFloat(secondsParam, 64)
-	if err != nil || delaySeconds < 0 {
-		http.Error(w, "invalid delay", http.StatusBadRequest)
+	// NaN fails every comparison, so it is rejected explicitly; +Inf is caught by the upper bound.
+	if err != nil || math.IsNaN(delaySeconds) || delaySeconds < 0 || delaySeconds > s.cfg.DelayMaxSeconds {
+		http.Error(w, fmt.Sprintf("invalid delay: use 0 to %g seconds", s.cfg.DelayMaxSeconds), http.StatusBadRequest)
 		return
 	}
-	time.Sleep(time.Duration(delaySeconds * float64(time.Second)))
-	respondJSON(w, http.StatusOK, map[string]string{"delay": secondsParam})
+
+	timer := time.NewTimer(time.Duration(delaySeconds * float64(time.Second)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		respondJSON(w, http.StatusOK, map[string]string{"delay": secondsParam})
+	case <-r.Context().Done():
+		// The client is gone; nobody reads the response.
+	}
 }
 
 // handlePanic godoc
@@ -796,8 +825,8 @@ func (s *Server) openAPISpec() map[string]any {
 			},
 			"/env": map[string]any{
 				"get": map[string]any{
-					"summary":   "Environment variables",
-					"responses": map[string]any{"200": map[string]any{"description": "Environment map"}},
+					"summary":   "Runtime environment (allowlisted, no secrets)",
+					"responses": map[string]any{"200": map[string]any{"description": "Allowlisted environment map"}},
 				},
 			},
 			"/headers": map[string]any{
@@ -877,14 +906,17 @@ func (s *Server) openAPISpec() map[string]any {
 	}
 }
 
-// Serve launches the HTTP server on the configured port.
-func (s *Server) Serve() error {
-	srv := &http.Server{
-		Addr:    s.cfg.Addr(),
-		Handler: s.router,
-	}
-	s.logger.Info("listening", zap.String("addr", s.cfg.Addr()))
-	return srv.ListenAndServe()
+// PprofHandler serves Go profiling (/debug/pprof/*). It is meant for its own listener on a
+// loopback address (PPROF_ADDR) - never the public router: a heap profile holds request data and
+// secrets from memory, and /profile burns CPU on demand. Reach it with kubectl port-forward.
+func PprofHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
 }
 
 func respondJSON(w http.ResponseWriter, status int, payload any) {

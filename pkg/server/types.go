@@ -11,6 +11,8 @@ type VersionResponse struct {
 	Commit      string `json:"commit" example:"abc1234567890"`
 	CommitShort string `json:"commit_short" example:"abc1234"`
 	BuildTime   string `json:"build_time" example:"2024-01-01T00:00:00Z"`
+	// ChaosEnabled tells the UI whether /panic and the probe toggles exist (CHAOS_ENABLED).
+	ChaosEnabled bool `json:"chaos_enabled" example:"false"`
 }
 
 // ErrorResponse represents an error response

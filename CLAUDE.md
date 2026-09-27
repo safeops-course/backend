@@ -107,7 +107,12 @@ go test ./...       # run tests
 | `RANDOM_DELAY_MAX` | `0` | Max random delay per request (ms) |
 | `RANDOM_ERROR_RATE` | `0` | Probability [0-1] of injecting HTTP 500 |
 | `CONFIG_PATH` | `""` | Directory to watch for ConfigMap changes |
-| `JWT_SECRET` | `"change-me-in-production"` | HMAC-SHA256 signing secret |
+| `JWT_SECRET` | (required, >= 32 chars) | HMAC-SHA256 signing secret; start fails without it |
+| `CHAOS_ENABLED` | `false` | `/panic` + readiness/liveness toggles exist only when true (still need a token) |
+| `PPROF_ENABLED` / `PPROF_ADDR` | `false` / `127.0.0.1:6060` | Profiling on its own loopback listener, never the public router |
+| `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` |
+| `AUTH_REGISTRATION_ENABLED` | `true` | Allow `POST /auth/register` |
+| `AUTH_LOGIN_ATTEMPTS_PER_MINUTE` / `AUTH_REGISTRATIONS_PER_MINUTE` | `10` / `10` | In-pod rate limits (per username / per pod) |
 | `DEPLOYMENT_ENVIRONMENT` | `""` | `production`/`staging` = JSON logging |
 | `UPTRACE_DSN` | `""` | Uptrace exporter DSN (optional) |
 
@@ -115,18 +120,24 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 
 ## API Endpoints
 
-**Health probes:** `/healthz`, `/readyz`, `/livez` (with enable/disable toggles)
-**Chaos:** `/panic`, `/status/{code}`, `/delay/{seconds}`
-**Observability:** `/metrics` (Prometheus), `/error/{level}`
-**Debug:** `/env`, `/headers`, `/echo`
-**Auth:** `POST /token`, `GET /token/validate`
+**Health probes:** `/healthz`, `/readyz`, `/livez`
+**Chaos (CHAOS_ENABLED=true + token):** `/panic`, `PUT /readyz|livez/enable|disable`
+**Failure signals (always on, harmless):** `/status/{code}`, `/delay/{seconds}` (capped), `/error/{level}`
+**Observability:** `/metrics` (Prometheus)
+**Debug:** `/env` (allowlist only), `/headers`, `/echo` (octet-stream)
+**Auth:** `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `GET /token/validate` - no password-less token endpoint
 **Docs:** `/openapi` (JSON spec), `/swagger/*` (Swagger UI)
-**Profiling:** `/debug/pprof/*`
-**Info:** `/version`, `/` (HTML landing page), `/configs`
+**Profiling:** separate listener `PPROF_ADDR` when `PPROF_ENABLED=true` (`server.PprofHandler`)
+**Info:** `/version` (incl. `chaos_enabled`), `/` (HTML landing page), `/configs`
+
+**Security guards (tests in `pkg/server/security_test.go`):** `/env` returns only `publicEnvKeys` /
+`FEATURE_*`; `TestRouteInventory` pins the full route list (chaos on and off) - a new route must be
+reviewed and added there. Never print response bodies of /env in test failures (CI logs).
 
 ## CI/CD
 
-- **build.yml** — on push to main/develop: build multi-platform Docker image (amd64+arm64), push to GHCR, Trivy scan
+- **pr.yml** — on every pull request (all must pass before merge): `go vet`, `go test -race`, `govulncheck` (pinned v1.8.0); golangci-lint v2.14.0 with gosec (`.golangci.yml`, every exclusion commented); `docker build` (no push); gitleaks v8.30.1 on the PR commits (`.gitleaks.toml`: default rules, NO allowlist; a planted test secret is allowed per line with an inline `gitleaks:allow` comment - a path allowlist with `condition = "AND"` let every secret in `_test.go` through)
+- **build.yml** — on push to main/develop: govulncheck, build each published platform (linux/amd64, linux/arm64) locally and **Trivy-scan it before anything is pushed** (blocking on fixable CRITICAL/HIGH), then build multi-platform (amd64+arm64), push to GHCR, cosign sign + SBOM attestation
 - **promote-production.yml** — manual: Trivy gate (blocking, CRITICAL only), re-tag staging image as production, create GitHub Release, bump version tag
 
 ## Coding Guidelines
@@ -135,7 +146,9 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 - All config via environment variables — no config files
 - Tests use `net/http/httptest` — no external test frameworks
 - Prometheus metrics use a custom registry (not the global default)
-- Middleware order matters: RequestID → RealIP → Recoverer → CORS → OTel → Metrics → Logging → RandomBehavior
+- Middleware order matters: RequestID → Recoverer → OTel → Metrics → Logging → RandomBehavior
+  (no RealIP: X-Forwarded-For is caller-controlled; no CORS: the browser calls the API same-origin via nginx)
 - Version info is injected via ldflags — never hardcode versions
 - Docker image runs as non-root user `app` (uid 10001)
-- Trivy scans are non-blocking in CI (build), blocking for production promotion
+- Trivy blocks in CI before push (build.yml, fixable CRITICAL/HIGH) and again at production promotion
+- `http.Server` has ReadHeaderTimeout/ReadTimeout/WriteTimeout/IdleTimeout (cmd/api/main.go); keep WriteTimeout above DELAY_MAX_SECONDS
