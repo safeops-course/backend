@@ -29,6 +29,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write   # SLSA build provenance (actions/attest-build-provenance)
+      artifact-metadata: write  # its storage record (registry link); without it only a warning
 
     steps:
       - name: Checkout code
