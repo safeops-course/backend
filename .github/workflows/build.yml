@@ -86,7 +86,7 @@ jobs:
 
       # Scan BEFORE anything is pushed or signed (security review 2026-09-27): build each published
       # platform into the local Docker (one platform per load), scan it, and stop on a fixable
-      # CRITICAL/HIGH. The multi-platform push below reuses the same cache and build args.
+      # CRITICAL/HIGH. The push below publishes exactly these two images.
       # Trivy reads trivy.yaml / .trivyignore from the repo root if present; the inputs below win.
       - name: Build image for the scan (linux/amd64, local only)
         uses: docker/build-push-action@v6
@@ -96,6 +96,11 @@ jobs:
           push: false
           load: true
           tags: local-scan/backend:${{ github.sha }}-amd64
+          labels: |
+            org.opencontainers.image.title=backend
+            org.opencontainers.image.version=${{ steps.meta.outputs.full_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.build_date }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             APP_VERSION=${{ steps.meta.outputs.full_tag }}
@@ -125,6 +130,11 @@ jobs:
           push: false
           load: true
           tags: local-scan/backend:${{ github.sha }}-arm64
+          labels: |
+            org.opencontainers.image.title=backend
+            org.opencontainers.image.version=${{ steps.meta.outputs.full_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.build_date }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             APP_VERSION=${{ steps.meta.outputs.full_tag }}
@@ -146,32 +156,32 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
-      - name: Build and push Docker image
+      # Publish exactly what Trivy scanned: the two loaded single-platform images are pushed as
+      # <tag>-amd64 / <tag>-arm64 and joined into one multi-platform index. No second build, so
+      # nothing unscanned can be shipped (a rebuild could pull newer packages on a cache miss).
+      # The -amd64/-arm64 tags do not match the Flux image policies (they end in -<timestamp>).
+      - name: Push the scanned images as one multi-platform image
         id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.env.outputs.environment }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.full_tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.short_sha }}
-          labels: |
-            org.opencontainers.image.title=backend
-            org.opencontainers.image.version=${{ steps.meta.outputs.full_tag }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ steps.meta.outputs.build_date }}
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-            APP_VERSION=${{ steps.meta.outputs.full_tag }}
-            COMMIT=${{ github.sha }}
-            APP_COMMIT=${{ github.sha }}
-            APP_COMMIT_SHORT=${{ steps.meta.outputs.short_sha }}
-            BUILD_DATE=${{ steps.meta.outputs.build_date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+        env:
+          REPO: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          FULL_TAG: ${{ steps.meta.outputs.full_tag }}
+          ENV_TAG: ${{ steps.env.outputs.environment }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          SCANNED: local-scan/backend:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            docker tag "${SCANNED}-${arch}" "${REPO}:${FULL_TAG}-${arch}"
+            docker push "${REPO}:${FULL_TAG}-${arch}"
+          done
+          docker buildx imagetools create \
+            --tag "${REPO}:${ENV_TAG}" \
+            --tag "${REPO}:${FULL_TAG}" \
+            --tag "${REPO}:${SHORT_SHA}" \
+            "${REPO}:${FULL_TAG}-amd64" "${REPO}:${FULL_TAG}-arm64"
+          digest="$(docker buildx imagetools inspect "${REPO}:${FULL_TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "${digest}" == sha256:* ]] || { echo "::error::no digest for ${REPO}:${FULL_TAG}"; exit 1; }
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Sign image with cosign (keyless)
         env:

@@ -565,6 +565,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(code)
+	// Best effort: the status is already sent; a failed body write (client gone) changes nothing.
 	_, _ = fmt.Fprintf(w, "status forced to %d\n", code)
 }
 
