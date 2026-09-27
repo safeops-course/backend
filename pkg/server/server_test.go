@@ -12,7 +12,12 @@ import (
 	"github.com/ldbl/sre/backend/pkg/config"
 )
 
-func newTestServer(t *testing.T) *Server {
+// testJWTSecret is long enough for config.Validate (MinJWTSecretLength).
+const testJWTSecret = "test-secret-0123456789abcdefghijklmnop"
+
+// newTestServer builds a server with safe defaults (chaos off, registration on);
+// options change the config before New validates it.
+func newTestServer(t *testing.T, options ...func(*config.Config)) *Server {
 	t.Helper()
 	cfg := config.Config{
 		Port:               0,
@@ -24,9 +29,17 @@ func newTestServer(t *testing.T) *Server {
 		BuildDate:          "2024-01-01T00:00:00Z",
 		RandomDelayMax:     0,
 		RandomErrorRate:    0,
-		JWTSecret:          "test-secret",
+		JWTSecret:          testJWTSecret,
 		JWTTokenTTLMinutes: 60,
 		AuthDBPath:         t.TempDir() + "/users.json",
+
+		DelayMaxSeconds:        10,
+		RegistrationEnabled:    true,
+		LoginAttemptsPerMinute: 10,
+		RegistrationsPerMinute: 10,
+	}
+	for _, option := range options {
+		option(&cfg)
 	}
 	srv := New(cfg, nil)
 	return srv
@@ -68,8 +81,10 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func withChaos(cfg *config.Config) { cfg.ChaosEnabled = true }
+
 func TestReadyTogglingRequiresAuth(t *testing.T) {
-	srv := newTestServer(t)
+	srv := newTestServer(t, withChaos)
 
 	unauthReq := httptest.NewRequest(http.MethodPut, "/readyz/disable", nil)
 	unauthRec := httptest.NewRecorder()
@@ -105,7 +120,7 @@ func TestReadyTogglingRequiresAuth(t *testing.T) {
 }
 
 func TestPanicEndpointRequiresAuth(t *testing.T) {
-	srv := newTestServer(t)
+	srv := newTestServer(t, withChaos)
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
@@ -250,9 +265,12 @@ func TestVersionEndpoint(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
 
-	var body map[string]string
+	var body map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if body["chaos_enabled"] != false {
+		t.Fatalf("expected chaos_enabled false by default, got %v", body["chaos_enabled"])
 	}
 	if body["version"] != "vtest" {
 		t.Fatalf("expected version vtest, got %s", body["version"])

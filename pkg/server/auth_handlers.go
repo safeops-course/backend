@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
@@ -61,9 +64,39 @@ func (s *Server) authenticatedUsername(ctx context.Context) (string, bool) {
 	return username, true
 }
 
+// maxLimiterKeyLength matches the username column (VARCHAR(64)); longer input cannot be a user,
+// and a cap keeps an attacker from filling the limiter with megabyte-long keys.
+const maxLimiterKeyLength = 64
+
+func loginLimiterKey(username string) string {
+	key := strings.ToLower(strings.TrimSpace(username))
+	if len(key) > maxLimiterKeyLength {
+		key = key[:maxLimiterKeyLength]
+	}
+	return key
+}
+
+func respondTooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
+	seconds := int(math.Ceil(retryAfter.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	respondJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests, try again later"})
+}
+
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if s.users == nil {
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "auth store not initialized"})
+		return
+	}
+	if !s.cfg.RegistrationEnabled {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "registration is disabled"})
+		return
+	}
+	if allowed, retryAfter := s.registrationLimiter.allow("register"); !allowed {
+		s.logger.Ctx(r.Context()).Warn("registration rate limit reached")
+		respondTooManyRequests(w, retryAfter)
 		return
 	}
 
@@ -115,6 +148,12 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var req authCredentialsRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	if allowed, retryAfter := s.loginLimiter.allow(loginLimiterKey(req.Username)); !allowed {
+		s.logger.Ctx(r.Context()).Warn("login rate limit reached", zap.String("username", loginLimiterKey(req.Username)))
+		respondTooManyRequests(w, retryAfter)
 		return
 	}
 
