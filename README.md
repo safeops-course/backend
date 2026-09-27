@@ -82,7 +82,7 @@ exposes before adding it there.
 | `AUTH_REGISTRATIONS_PER_MINUTE` | `10` | Registrations per minute, per pod |
 
 Invalid values fail loudly: a short `JWT_SECRET`, a boolean that is not `true`/`false` (unless its
-flag overrides it), a zero limit or a `DELAY_MAX_SECONDS` that is not greater than 0 and at most 300 stops the start with a
+flag overrides it), a zero limit, or a `DELAY_MAX_SECONDS` of 0 or less or greater than 300, stops the start with a
 message naming the variable.
 
 Rate limits: when 10 000 keys are tracked, the oldest window is evicted - login never locks out
