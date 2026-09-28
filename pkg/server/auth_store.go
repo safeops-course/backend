@@ -383,6 +383,12 @@ func hashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// comparePassword refuses a password over maxPasswordBytes before bcrypt sees it:
+// CompareHashAndPassword uses only the first 72 bytes, so "the 72-byte password
+// plus anything" would match. Both stores call this, so both are covered.
 func comparePassword(storedHash, password string) error {
+	if len(password) > maxPasswordBytes {
+		return errInvalidCredentials
+	}
 	return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(password))
 }

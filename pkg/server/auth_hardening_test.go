@@ -36,12 +36,19 @@ func TestRegisterInvalidInputIs400(t *testing.T) {
 	}
 }
 
-func TestLoginWithOverlongPasswordIs401(t *testing.T) {
+// bcrypt compares only the first 72 bytes: a user whose password is exactly 72
+// bytes must not be able to log in with that password plus anything.
+func TestLoginRejects72BytePrefixPlusJunk(t *testing.T) {
 	srv := newTestServer(t)
-	registerAndGetToken(t, srv)
-	rr := postJSON(t, srv, "/auth/login", `{"username":"test-user","password":"`+strings.Repeat("p", 80)+`"}`)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401", rr.Code)
+	password := strings.Repeat("p", maxPasswordBytes)
+	if rr := postJSON(t, srv, "/auth/register", `{"username":"long-pw","password":"`+password+`"}`); rr.Code != 201 {
+		t.Fatalf("register with a 72-byte password: got %d", rr.Code)
+	}
+	if rr := postJSON(t, srv, "/auth/login", `{"username":"long-pw","password":"`+password+`"}`); rr.Code != http.StatusOK {
+		t.Fatalf("login with the exact password: got %d, want 200", rr.Code)
+	}
+	if rr := postJSON(t, srv, "/auth/login", `{"username":"long-pw","password":"`+password+`anything"}`); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("login with the 72-byte password plus junk: got %d, want 401", rr.Code)
 	}
 }
 
