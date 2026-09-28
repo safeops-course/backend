@@ -80,7 +80,8 @@ func TestNoDatabaseInKubernetesIsFatal(t *testing.T) {
 		newTestServer(t) // no DatabaseURL; must exit before returning
 		return
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestNoDatabaseInKubernetesIsFatal$")
+	// Re-runs this test binary itself (os.Args[0]) with fixed arguments: no external input.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNoDatabaseInKubernetesIsFatal$") //nolint:gosec // self re-exec, fixed args
 	cmd.Env = append(os.Environ(), "BACKEND_FATAL_CHILD=1", "KUBERNETES_SERVICE_HOST=10.0.0.1")
 	out, err := cmd.CombinedOutput()
 	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.Success() {
@@ -107,7 +108,7 @@ func TestPoolIsLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := stdlib.OpenDB(*cfg) // does not connect until used
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	limitPool(db)
 	if got := db.Stats().MaxOpenConnections; got != maxOpenConns {
 		t.Fatalf("MaxOpenConnections = %d, want %d", got, maxOpenConns)
