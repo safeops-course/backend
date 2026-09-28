@@ -1,0 +1,24 @@
+# Actions are pinned by commit SHA (a tag can be moved to other code; a SHA
+# cannot). Dependabot keeps the SHAs, the Go modules and the Dockerfile base
+# images current: one grouped PR per ecosystem per week, and the PR checks
+# (tests, govulncheck, Trivy) run on it like on any other change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

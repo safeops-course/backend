@@ -17,24 +17,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
-      contents: write
-      security-events: write
+      contents: write # the release and the next git tag
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
       - name: Log in to Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get staging tag
         id: tags
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Through env, never ${{ }} inside the script: the input is not code.
+          INPUT_TAG: ${{ inputs.staging_tag }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          INPUT_TAG="${{ inputs.staging_tag }}"
 
           if [[ -n "$INPUT_TAG" ]]; then
             STAGING_TAG="$INPUT_TAG"
@@ -42,8 +47,14 @@ jobs:
           else
             echo "Fetching latest staging tag..."
 
+            # An organization's packages live under /orgs/, a user's under /users/.
+            if [[ "$(gh api "/users/${OWNER}" --jq .type)" == "Organization" ]]; then
+              owner_path="orgs/${OWNER}"
+            else
+              owner_path="users/${OWNER}"
+            fi
             LATEST_TAG=$(gh api \
-              "/users/${{ github.repository_owner }}/packages/container/backend/versions" \
+              "/${owner_path}/packages/container/backend/versions" \
               --jq '.[].metadata.container.tags[]' 2>/dev/null | \
               grep -E '^staging-v[0-9]+\.[0-9]+\.[0-9]+-[a-f0-9]+-[0-9]+$' | \
               sort -t'-' -k4 -n -r | \
@@ -74,7 +85,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Run Trivy security scan (fail on critical)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.staging_tag }}
           format: table
