@@ -28,9 +28,17 @@ type DelayResponse struct {
 }
 
 // ConfigsResponse represents the config watcher response
+// ConfigSummary describes one watched file without its value (it may come
+// from a mounted Secret). The fingerprint is an HMAC with a key that is random
+// per process: it changes when the value changes (a reload is visible), but it
+// cannot be checked against guessed values, and no length is shown.
+type ConfigSummary struct {
+	Fingerprint string `json:"fingerprint" example:"3a7bd3e2360a"`
+}
+
 type ConfigsResponse struct {
-	Enabled bool              `json:"enabled" example:"true"`
-	Path    string            `json:"path,omitempty" example:"/etc/config"`
-	Configs map[string]string `json:"configs,omitempty"`
-	Message string            `json:"message,omitempty"`
+	Enabled bool                     `json:"enabled" example:"true"`
+	Path    string                   `json:"path,omitempty" example:"/etc/config"`
+	Configs map[string]ConfigSummary `json:"configs,omitempty"`
+	Message string                   `json:"message,omitempty"`
 }

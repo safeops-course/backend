@@ -132,8 +132,10 @@ func (s *Server) handleTokenValidate(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := s.validateToken(tokenString)
 	if err != nil {
+		// The library's reason (signature, expiry by how much, algorithm) goes to
+		// the log only; the client gets one answer for every failure.
 		s.logger.Ctx(r.Context()).Warn("token validation failed", zap.Error(err))
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 		return
 	}
 

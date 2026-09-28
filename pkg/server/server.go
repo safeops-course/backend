@@ -2,6 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +43,10 @@ const maxRequestBodyBytes int64 = 1 << 20
 
 // Server represents the HTTP API.
 type Server struct {
+	// configFingerprintKey keys the /configs fingerprints: random per process,
+	// so a fingerprint cannot be matched against guessed values offline.
+	configFingerprintKey []byte
+
 	cfg           config.Config
 	router        chi.Router
 	logger        *otelzap.Logger
@@ -70,6 +78,8 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		registry: prometheus.NewRegistry(),
 		randSrc:  rand.New(rand.NewSource(time.Now().UnixNano())),
 
+		configFingerprintKey: randomKey(32),
+
 		loginLimiter:        newFixedWindowLimiter(cfg.LoginAttemptsPerMinute),
 		registrationLimiter: newFixedWindowLimiter(cfg.RegistrationsPerMinute),
 	}
@@ -88,6 +98,12 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		s.users = users
 		logger.Info("initialized auth store", zap.String("backend", "postgres"))
 	} else {
+		// Inside Kubernetes a file store is a trap: every pod has its own /tmp,
+		// so a user registered on one replica cannot log in on another, and a
+		// restart loses everyone. Fail loudly instead; locally the file stays.
+		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+			logger.Fatal("no database configured (DATABASE_URL / POSTGRES_*) - refusing the per-pod file auth store inside Kubernetes")
+		}
 		authStorePath := strings.TrimSpace(cfg.AuthDBPath)
 		if authStorePath == "" {
 			authStorePath = "/tmp/users.json"
@@ -293,6 +309,13 @@ func (s *Server) randomBehaviorMiddleware(next http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Chaos is for the application's requests, not for the kubelet: a delayed
+		// or failed probe restarts the pod, and Prometheus loses the metrics that
+		// should show the chaos. Probes and /metrics always answer normally.
+		if chaosExempt(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.cfg.RandomDelayMax > 0 {
 			delay := s.randomDelay()
 			time.Sleep(delay)
@@ -305,6 +328,14 @@ func (s *Server) randomBehaviorMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func chaosExempt(path string) bool {
+	switch path {
+	case "/healthz", "/readyz", "/livez", "/metrics":
+		return true
+	}
+	return false
 }
 
 func (s *Server) randomDelay() time.Duration {
@@ -715,7 +746,7 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigs godoc
 // @Summary      Config watcher values
-// @Description  Returns values from watched ConfigMaps/Secrets
+// @Description  Key names of the watched directory with a keyed fingerprint of each value (changes on reload) - never the values
 // @Tags         Config
 // @Produce      json
 // @Success      200  {object}  ConfigsResponse
@@ -728,10 +759,20 @@ func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Never the values: CONFIG_PATH may hold a mounted Secret. The key names
+	// and a keyed fingerprint of each value still show a reload (the
+	// fingerprint changes); a plain hash or a length could be checked against
+	// guessed values offline, so neither is returned.
+	configs := make(map[string]ConfigSummary)
+	for key, value := range s.configWatcher.GetAll() {
+		mac := hmac.New(sha256.New, s.configFingerprintKey)
+		mac.Write([]byte(value))
+		configs[key] = ConfigSummary{Fingerprint: hex.EncodeToString(mac.Sum(nil))[:12]}
+	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,
 		"path":    s.cfg.ConfigPath,
-		"configs": s.configWatcher.GetAll(),
+		"configs": configs,
 	})
 }
 
@@ -1087,3 +1128,13 @@ const indexTemplate = `<!DOCTYPE html>
   </div>
 </body>
 </html>`
+
+// randomKey returns n bytes from crypto/rand (it panics only if the OS
+// random source fails, which the process cannot recover from anyway).
+func randomKey(n int) []byte {
+	key := make([]byte, n)
+	if _, err := cryptorand.Read(key); err != nil {
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
+	return key
+}

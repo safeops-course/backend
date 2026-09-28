@@ -43,7 +43,7 @@
         },
         "/configs": {
             "get": {
-                "description": "Returns values from watched ConfigMaps/Secrets",
+                "description": "Key names of the watched directory with a keyed fingerprint of each value (changes on reload) - never the values",
                 "produces": [
                     "application/json"
                 ],
@@ -558,13 +558,22 @@
         }
     },
     "definitions": {
+        "server.ConfigSummary": {
+            "type": "object",
+            "properties": {
+                "fingerprint": {
+                    "type": "string",
+                    "example": "3a7bd3e2360a"
+                }
+            }
+        },
         "server.ConfigsResponse": {
             "type": "object",
             "properties": {
                 "configs": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "string"
+                        "$ref": "#/definitions/server.ConfigSummary"
                     }
                 },
                 "enabled": {

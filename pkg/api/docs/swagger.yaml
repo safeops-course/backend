@@ -1,10 +1,16 @@
 basePath: /
 definitions:
+  server.ConfigSummary:
+    properties:
+      fingerprint:
+        example: 3a7bd3e2360a
+        type: string
+    type: object
   server.ConfigsResponse:
     properties:
       configs:
         additionalProperties:
-          type: string
+          $ref: '#/definitions/server.ConfigSummary'
         type: object
       enabled:
         example: true
@@ -97,7 +103,8 @@ paths:
       - General
   /configs:
     get:
-      description: Returns values from watched ConfigMaps/Secrets
+      description: Key names of the watched directory with a keyed fingerprint of
+        each value (changes on reload) - never the values
       produces:
       - application/json
       responses:
