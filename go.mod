@@ -1,6 +1,6 @@
 module github.com/ldbl/sre/backend
 
-go 1.25.13
+go 1.27.1
 
 require (
 	github.com/exaring/otelpgx v0.12.0

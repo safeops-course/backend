@@ -100,7 +100,7 @@ pkg/
 
 ## Key Technologies
 
-- **Go 1.24** with chi router
+- **Go 1.27** with chi router
 - **Prometheus** client_golang for metrics
 - **OpenTelemetry** + Uptrace for distributed tracing
 - **otelzap** (zap) for structured logging
