@@ -175,8 +175,9 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		} else {
 			s.configWatcher = watcher
 			// Register callback for config changes
-			watcher.OnChange(func(key, value string) {
-				logger.Info("config changed", zap.String("key", key), zap.String("value", value))
+			watcher.OnChange(func(key, _ string) {
+				// The key only: CONFIG_PATH may hold a mounted Secret, and logs reach Uptrace.
+				logger.Info("config changed", zap.String("key", key))
 			})
 			watcher.Watch()
 		}
