@@ -19,6 +19,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/backend
+  SYFT_VERSION: "1.52.0"
+  SYFT_SHA256: caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d
 
 jobs:
   build:
@@ -32,13 +34,32 @@ jobs:
       artifact-metadata: write  # its storage record (registry link); without it only a warning
 
     steps:
+      # A manual run builds only what the branch rules protect: develop from develop or main,
+      # staging only from main (a PR-checked, reviewed commit). Any other branch would give an
+      # image the PR checks never saw a path to staging and production.
+      - name: Only main and develop may be built
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          TARGET: ${{ inputs.environment }}
+        run: |
+          case "${REF}" in
+            refs/heads/main|refs/heads/develop) ;;
+            *) echo "::error::builds run only from main or develop, not ${REF}"; exit 1 ;;
+          esac
+          if [[ "${EVENT}" == "workflow_dispatch" && "${TARGET}" == "staging" && "${REF}" != "refs/heads/main" ]]; then
+            echo "::error::a staging image is built only from main"
+            exit 1
+          fi
+
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false # nothing here pushes to git
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
 
@@ -49,32 +70,36 @@ jobs:
       # The arm64 image runs RUN steps of its final stage (apk upgrade, ...) on this amd64 runner:
       # that needs QEMU emulation. Without it a cache miss fails with "exec format error".
       - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Determine environment
         id: env
+        env:
+          EVENT: ${{ github.event_name }}
+          TARGET: ${{ inputs.environment }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "environment=staging" >> $GITHUB_OUTPUT
+          if [[ "${EVENT}" == "workflow_dispatch" ]]; then
+            echo "environment=${TARGET}" >> "$GITHUB_OUTPUT"
+          elif [[ "${REF_NAME}" == "main" ]]; then
+            echo "environment=staging" >> "$GITHUB_OUTPUT"
           else
-            echo "environment=develop" >> $GITHUB_OUTPUT
+            echo "environment=develop" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract metadata
@@ -99,7 +124,7 @@ jobs:
       # Trivy reads trivy.yaml / .trivyignore from the repo root if present; the inputs below win.
       # Each platform has its own GHA cache scope (a shared scope makes the builds overwrite each other).
       - name: Build image for the scan (linux/amd64, local only)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -123,7 +148,7 @@ jobs:
           platforms: linux/amd64
 
       - name: Trivy scan linux/amd64 (blocking, before push)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: local-scan/backend:${{ github.sha }}-amd64
           format: table
@@ -133,7 +158,7 @@ jobs:
           exit-code: "1"
 
       - name: Build image for the scan (linux/arm64, local only)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -157,7 +182,7 @@ jobs:
           platforms: linux/arm64
 
       - name: Trivy scan linux/arm64 (blocking, before push)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: local-scan/backend:${{ github.sha }}-arm64
           format: table
@@ -197,7 +222,7 @@ jobs:
       # when the scanned, loaded images are pushed, so GitHub signs one (Sigstore, GitHub OIDC) and
       # pushes it to the registry next to the image. Verify: gh attestation verify oci://<image> --owner safeops-course
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -214,7 +239,12 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          # syft pinned and checksum-verified (this job holds packages:write and id-token:write).
+          archive="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "${archive}" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${archive}"
+          echo "${SYFT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C /usr/local/bin syft
+          rm "${archive}"
           syft "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}" -o spdx-json=sbom.spdx.json
           cosign attest --yes --predicate sbom.spdx.json \
             --type spdxjson \
