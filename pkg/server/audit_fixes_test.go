@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -54,11 +56,16 @@ func TestConfigsHidesValues(t *testing.T) {
 			break
 		}
 	}
-	if !strings.Contains(body, `"api-key"`) || !strings.Contains(body, `"sha256"`) {
-		t.Fatalf("expected the key with a hash, got %s", body)
+	if !strings.Contains(body, `"api-key"`) || !strings.Contains(body, `"fingerprint"`) {
+		t.Fatalf("expected the key with a fingerprint, got %s", body)
 	}
 	if strings.Contains(body, "s3cret-value") {
 		t.Fatalf("/configs leaked a value: %s", body)
+	}
+	// Nothing an outsider can check a guess against: no plain hash, no length.
+	plain := sha256.Sum256([]byte("s3cret-value"))
+	if strings.Contains(body, hex.EncodeToString(plain[:])[:12]) || strings.Contains(body, `"bytes"`) {
+		t.Fatalf("/configs exposes value-derived data an outsider can verify: %s", body)
 	}
 }
 

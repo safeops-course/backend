@@ -38,7 +38,7 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 | `/env` | GET | Allowlisted runtime variables only (pod, namespace, environment, version, `FEATURE_*`) - never secrets |
 | `/headers` | GET | Request headers (for debugging) |
 | `/echo` | POST | Echo request body (always `application/octet-stream`) |
-| `/configs` | GET | Keys of the watched directory (`CONFIG_PATH`) with a short SHA-256 and the size of each value - never the values |
+| `/configs` | GET | Keys of the watched directory (`CONFIG_PATH`) with a keyed fingerprint of each value (changes on reload) - never the values or anything to check a guess against |
 | `/status/{code}` | GET | Return a specific HTTP status code |
 | `/delay/{seconds}` | GET | Delay 0..`DELAY_MAX_SECONDS` seconds (stops when the client leaves) |
 | `/error/{level}` | GET | Log at specified level (debug/info/warn/error) |
@@ -65,7 +65,7 @@ exposes before adding it there.
 | `UI_COLOR` | `#2E5CFF` | Accent color |
 | `RANDOM_DELAY_MAX` | `0` | Max random delay per request (ms); not for `/healthz`, `/readyz`, `/livez`, `/metrics` |
 | `RANDOM_ERROR_RATE` | `0` | Probability 0–1 of injecting HTTP 500; not for the probes and `/metrics` |
-| `CONFIG_PATH` | | Directory to watch for ConfigMap changes (`/configs` shows keys and hashes, not values) |
+| `CONFIG_PATH` | | Directory to watch for ConfigMap changes (`/configs` shows keys and keyed fingerprints, not values) |
 | `JWT_SECRET` | (required) | HMAC-SHA256 signing secret, at least 32 characters - the server does not start without it |
 | `JWT_TOKEN_TTL_MINUTES` | `60` | Token expiry |
 | `DEPLOYMENT_ENVIRONMENT` | | `production`/`staging` = JSON logging |
@@ -97,7 +97,7 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 - **Metrics** — Prometheus via custom registry at `/metrics`
 - **Tracing** — OpenTelemetry SDK with Uptrace exporter, automatic HTTP instrumentation via `otelhttp`
 - **Logging** — Structured logging with `otelzap` (JSON in production, console in development)
-- **ConfigWatch** — `fsnotify`-based hot-reload for a mounted ConfigMap (`/configs` shows which keys changed via their hashes)
+- **ConfigWatch** — `fsnotify`-based hot-reload for a mounted ConfigMap (`/configs` shows which keys changed via their fingerprints)
 
 ## CI/CD
 

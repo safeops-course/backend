@@ -45,7 +45,7 @@ const docTemplate = `{
         },
         "/configs": {
             "get": {
-                "description": "Key names of the watched directory with a short SHA-256 and the size of each value - never the values",
+                "description": "Key names of the watched directory with a keyed fingerprint of each value (changes on reload) - never the values",
                 "produces": [
                     "application/json"
                 ],
@@ -563,11 +563,7 @@ const docTemplate = `{
         "server.ConfigSummary": {
             "type": "object",
             "properties": {
-                "bytes": {
-                    "type": "integer",
-                    "example": 42
-                },
-                "sha256": {
+                "fingerprint": {
                     "type": "string",
                     "example": "3a7bd3e2360a"
                 }

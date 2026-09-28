@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,6 +43,10 @@ const maxRequestBodyBytes int64 = 1 << 20
 
 // Server represents the HTTP API.
 type Server struct {
+	// configFingerprintKey keys the /configs fingerprints: random per process,
+	// so a fingerprint cannot be matched against guessed values offline.
+	configFingerprintKey []byte
+
 	cfg           config.Config
 	router        chi.Router
 	logger        *otelzap.Logger
@@ -71,6 +77,8 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		logger:   logger,
 		registry: prometheus.NewRegistry(),
 		randSrc:  rand.New(rand.NewSource(time.Now().UnixNano())),
+
+		configFingerprintKey: randomKey(32),
 
 		loginLimiter:        newFixedWindowLimiter(cfg.LoginAttemptsPerMinute),
 		registrationLimiter: newFixedWindowLimiter(cfg.RegistrationsPerMinute),
@@ -738,7 +746,7 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigs godoc
 // @Summary      Config watcher values
-// @Description  Key names of the watched directory with a short SHA-256 and the size of each value - never the values
+// @Description  Key names of the watched directory with a keyed fingerprint of each value (changes on reload) - never the values
 // @Tags         Config
 // @Produce      json
 // @Success      200  {object}  ConfigsResponse
@@ -752,12 +760,14 @@ func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Never the values: CONFIG_PATH may hold a mounted Secret. The key names
-	// and a short hash of each value still show a reload (the hash changes)
-	// without publishing anything.
+	// and a keyed fingerprint of each value still show a reload (the
+	// fingerprint changes); a plain hash or a length could be checked against
+	// guessed values offline, so neither is returned.
 	configs := make(map[string]ConfigSummary)
 	for key, value := range s.configWatcher.GetAll() {
-		sum := sha256.Sum256([]byte(value))
-		configs[key] = ConfigSummary{SHA256: hex.EncodeToString(sum[:])[:12], Bytes: len(value)}
+		mac := hmac.New(sha256.New, s.configFingerprintKey)
+		mac.Write([]byte(value))
+		configs[key] = ConfigSummary{Fingerprint: hex.EncodeToString(mac.Sum(nil))[:12]}
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,
@@ -1118,3 +1128,13 @@ const indexTemplate = `<!DOCTYPE html>
   </div>
 </body>
 </html>`
+
+// randomKey returns n bytes from crypto/rand (it panics only if the OS
+// random source fails, which the process cannot recover from anyway).
+func randomKey(n int) []byte {
+	key := make([]byte, n)
+	if _, err := cryptorand.Read(key); err != nil {
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
+	return key
+}
