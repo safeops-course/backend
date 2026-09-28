@@ -1,10 +1,19 @@
 basePath: /
 definitions:
+  server.ConfigSummary:
+    properties:
+      bytes:
+        example: 42
+        type: integer
+      sha256:
+        example: 3a7bd3e2360a
+        type: string
+    type: object
   server.ConfigsResponse:
     properties:
       configs:
         additionalProperties:
-          type: string
+          $ref: '#/definitions/server.ConfigSummary'
         type: object
       enabled:
         example: true
@@ -97,7 +106,8 @@ paths:
       - General
   /configs:
     get:
-      description: Returns values from watched ConfigMaps/Secrets
+      description: Key names of the watched directory with a short SHA-256 and the
+        size of each value - never the values
       produces:
       - application/json
       responses:

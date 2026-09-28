@@ -738,16 +738,11 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigs godoc
 // @Summary      Config watcher values
-// @Description  Returns values from watched ConfigMaps/Secrets
+// @Description  Key names of the watched directory with a short SHA-256 and the size of each value - never the values
 // @Tags         Config
 // @Produce      json
 // @Success      200  {object}  ConfigsResponse
 // @Router       /configs [get]
-type configSummary struct {
-	SHA256 string `json:"sha256"`
-	Bytes  int    `json:"bytes"`
-}
-
 func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 	if s.configWatcher == nil {
 		respondJSON(w, http.StatusOK, map[string]any{
@@ -759,10 +754,10 @@ func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 	// Never the values: CONFIG_PATH may hold a mounted Secret. The key names
 	// and a short hash of each value still show a reload (the hash changes)
 	// without publishing anything.
-	configs := make(map[string]configSummary)
+	configs := make(map[string]ConfigSummary)
 	for key, value := range s.configWatcher.GetAll() {
 		sum := sha256.Sum256([]byte(value))
-		configs[key] = configSummary{SHA256: hex.EncodeToString(sum[:])[:12], Bytes: len(value)}
+		configs[key] = ConfigSummary{SHA256: hex.EncodeToString(sum[:])[:12], Bytes: len(value)}
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,

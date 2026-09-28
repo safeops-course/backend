@@ -28,9 +28,16 @@ type DelayResponse struct {
 }
 
 // ConfigsResponse represents the config watcher response
+// ConfigSummary describes one watched file without its value (it may come
+// from a mounted Secret): a short SHA-256 shows a reload, the size its scale.
+type ConfigSummary struct {
+	SHA256 string `json:"sha256" example:"3a7bd3e2360a"`
+	Bytes  int    `json:"bytes" example:"42"`
+}
+
 type ConfigsResponse struct {
-	Enabled bool              `json:"enabled" example:"true"`
-	Path    string            `json:"path,omitempty" example:"/etc/config"`
-	Configs map[string]string `json:"configs,omitempty"`
-	Message string            `json:"message,omitempty"`
+	Enabled bool                     `json:"enabled" example:"true"`
+	Path    string                   `json:"path,omitempty" example:"/etc/config"`
+	Configs map[string]ConfigSummary `json:"configs,omitempty"`
+	Message string                   `json:"message,omitempty"`
 }

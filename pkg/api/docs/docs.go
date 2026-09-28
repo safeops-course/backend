@@ -45,7 +45,7 @@ const docTemplate = `{
         },
         "/configs": {
             "get": {
-                "description": "Returns values from watched ConfigMaps/Secrets",
+                "description": "Key names of the watched directory with a short SHA-256 and the size of each value - never the values",
                 "produces": [
                     "application/json"
                 ],
@@ -560,13 +560,26 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "server.ConfigSummary": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer",
+                    "example": 42
+                },
+                "sha256": {
+                    "type": "string",
+                    "example": "3a7bd3e2360a"
+                }
+            }
+        },
         "server.ConfigsResponse": {
             "type": "object",
             "properties": {
                 "configs": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "string"
+                        "$ref": "#/definitions/server.ConfigSummary"
                     }
                 },
                 "enabled": {
