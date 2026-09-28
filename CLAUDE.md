@@ -51,6 +51,27 @@ This is the SRE Backend microservice — a Go reference API service modelled aft
 - Complex edge cases that might be forgotten
 - Future developers who may not understand the original intent
 
+## Lab by Design - read this before a security review
+
+This service is the **learning target** of the SafeOps course, not a product. Learners must be able to
+break it and watch how Kubernetes and the platform react. The following is **intended** and is not a
+finding by itself:
+
+| What | Why it exists |
+|---|---|
+| `GET /panic`, `PUT /readyz\|livez/{enable,disable}` | Crash the pod, make it not ready or not live, and watch restarts, Endpoints, alerts and traces (Ch11, Ch13, Ch14, Ch15). Exist only with `CHAOS_ENABLED=true` (develop, staging); any registered user may call them - registration is open on purpose. |
+| `/delay/{seconds}` (capped by `DELAY_MAX_SECONDS`), `/status/{code}`, `/error/{level}` | Produce latency, status codes and error logs on demand, so learners can see them in metrics, logs, traces and SLOs. Public, no token. |
+| `/headers`, `/echo`, `/env` (allowlist), `/version`, `/metrics` | Let learners inspect what the system sees and exports. |
+
+**What IS a finding** (report it):
+- chaos reachable in **production** (`CHAOS_ENABLED` must be `"false"` there; sre `scripts/check-app-security.sh` enforces it);
+- the delay cap removed or bypassed, pprof on the public router, `/env` returning a secret, a real secret or token in a response or log;
+- anything that lets a learner or visitor reach **other** systems (the cluster API, other namespaces, the database) or other users' data;
+- a crash or resource use the endpoints do not intend (e.g. a request that kills the pod without `/panic`).
+
+Be proportional: rank by what a visitor can really do to *someone else*, not by the fact that the lab
+lets people break their own demo environment.
+
 ## Project Overview
 
 Go microservice serving as the SRE Control Plane Backend — a reference API service modelled after [podinfo](https://github.com/stefanprodan/podinfo). Used as a learning target for SRE and Kubernetes workflows. Provides health probes, chaos engineering endpoints, Prometheus metrics, OpenTelemetry tracing, and JWT auth.
