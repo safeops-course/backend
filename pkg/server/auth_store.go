@@ -18,6 +18,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Connection pool share of one replica (see limitPool).
+const (
+	maxOpenConns = 10
+	maxIdleConns = 5
+)
+
 var (
 	errUserExists         = errors.New("user already exists")
 	errInvalidCredentials = errors.New("invalid username or password")
@@ -206,6 +212,7 @@ func newPostgresUserStore(databaseURL string) (*postgresUserStore, error) {
 	pgxCfg.Tracer = otelpgx.NewTracer()
 
 	db := stdlib.OpenDB(*pgxCfg)
+	limitPool(db)
 
 	store := &postgresUserStore{db: db}
 
@@ -370,4 +377,15 @@ func hashPassword(password string) (string, error) {
 
 func comparePassword(storedHash, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(password))
+}
+
+// limitPool caps the pool. database/sql opens connections without limit by
+// default, while every replica shares Postgres' max_connections (100 by default
+// in CloudNativePG): each pod gets a fixed share - production runs up to 3
+// replicas (HPA), so 30 at most.
+func limitPool(db *sql.DB) {
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 }

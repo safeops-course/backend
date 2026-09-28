@@ -10,7 +10,7 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 - Instrumented with Prometheus (custom registry) and OpenTelemetry
 - Structured logging with zap (JSON in production, console in development)
 - 12-factor app configuration via environment variables
-- Fault injection (random errors and latency via `RANDOM_ERROR_RATE` / `RANDOM_DELAY_MAX`)
+- Fault injection (random errors and latency via `RANDOM_ERROR_RATE` / `RANDOM_DELAY_MAX`; the probes and `/metrics` are exempt)
 - Swagger UI and OpenAPI 3 spec
 - JWT authentication with Postgres-backed user store
 - Multi-arch container image (amd64 + arm64) with Docker buildx and GitHub Actions
@@ -38,7 +38,7 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 | `/env` | GET | Allowlisted runtime variables only (pod, namespace, environment, version, `FEATURE_*`) - never secrets |
 | `/headers` | GET | Request headers (for debugging) |
 | `/echo` | POST | Echo request body (always `application/octet-stream`) |
-| `/configs` | GET | Current values of the watched ConfigMap (`CONFIG_PATH`) - never point it at a Secret |
+| `/configs` | GET | Keys of the watched directory (`CONFIG_PATH`) with a short SHA-256 and the size of each value - never the values |
 | `/status/{code}` | GET | Return a specific HTTP status code |
 | `/delay/{seconds}` | GET | Delay 0..`DELAY_MAX_SECONDS` seconds (stops when the client leaves) |
 | `/error/{level}` | GET | Log at specified level (debug/info/warn/error) |
@@ -63,9 +63,9 @@ exposes before adding it there.
 | `PORT` | `8080` | HTTP listen port |
 | `UI_MESSAGE` | `Welcome to the SRE control plane` | Landing page message |
 | `UI_COLOR` | `#2E5CFF` | Accent color |
-| `RANDOM_DELAY_MAX` | `0` | Max random delay per request (ms) |
-| `RANDOM_ERROR_RATE` | `0` | Probability 0–1 of injecting HTTP 500 |
-| `CONFIG_PATH` | | Directory to watch for ConfigMap changes (values are served on `/configs`) |
+| `RANDOM_DELAY_MAX` | `0` | Max random delay per request (ms); not for `/healthz`, `/readyz`, `/livez`, `/metrics` |
+| `RANDOM_ERROR_RATE` | `0` | Probability 0–1 of injecting HTTP 500; not for the probes and `/metrics` |
+| `CONFIG_PATH` | | Directory to watch for ConfigMap changes (`/configs` shows keys and hashes, not values) |
 | `JWT_SECRET` | (required) | HMAC-SHA256 signing secret, at least 32 characters - the server does not start without it |
 | `JWT_TOKEN_TTL_MINUTES` | `60` | Token expiry |
 | `DEPLOYMENT_ENVIRONMENT` | | `production`/`staging` = JSON logging |
@@ -73,6 +73,8 @@ exposes before adding it there.
 | `POSTGRES_USER`, `POSTGRES_PASSWORD` | | CloudNativePG credentials |
 | `POSTGRES_HOST` | | Postgres host (e.g. `app-postgres-rw`) |
 | `POSTGRES_DB` | `app` | Database name |
+
+Without a database the backend keeps users in a local file (`AUTH_DB_PATH`, default `/tmp/users.json`) - for local development only. Inside Kubernetes (`KUBERNETES_SERVICE_HOST` set) it refuses to start without one: every pod would have its own users. Each replica opens at most 10 connections to Postgres.
 | `CHAOS_ENABLED` | `false` | Expose `/panic` and the readiness/liveness toggles (still need a token) |
 | `PPROF_ENABLED` | `false` | Serve `/debug/pprof/*` on `PPROF_ADDR` |
 | `PPROF_ADDR` | `127.0.0.1:6060` | Profiling listener (loopback: reach it with `kubectl port-forward`) |
@@ -95,7 +97,7 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 - **Metrics** — Prometheus via custom registry at `/metrics`
 - **Tracing** — OpenTelemetry SDK with Uptrace exporter, automatic HTTP instrumentation via `otelhttp`
 - **Logging** — Structured logging with `otelzap` (JSON in production, console in development)
-- **ConfigWatch** — `fsnotify`-based hot-reload for a mounted ConfigMap (its values are public on `/configs`)
+- **ConfigWatch** — `fsnotify`-based hot-reload for a mounted ConfigMap (`/configs` shows which keys changed via their hashes)
 
 ## CI/CD
 

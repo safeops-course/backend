@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,6 +90,12 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		s.users = users
 		logger.Info("initialized auth store", zap.String("backend", "postgres"))
 	} else {
+		// Inside Kubernetes a file store is a trap: every pod has its own /tmp,
+		// so a user registered on one replica cannot log in on another, and a
+		// restart loses everyone. Fail loudly instead; locally the file stays.
+		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+			logger.Fatal("no database configured (DATABASE_URL / POSTGRES_*) - refusing the per-pod file auth store inside Kubernetes")
+		}
 		authStorePath := strings.TrimSpace(cfg.AuthDBPath)
 		if authStorePath == "" {
 			authStorePath = "/tmp/users.json"
@@ -293,6 +301,13 @@ func (s *Server) randomBehaviorMiddleware(next http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Chaos is for the application's requests, not for the kubelet: a delayed
+		// or failed probe restarts the pod, and Prometheus loses the metrics that
+		// should show the chaos. Probes and /metrics always answer normally.
+		if chaosExempt(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.cfg.RandomDelayMax > 0 {
 			delay := s.randomDelay()
 			time.Sleep(delay)
@@ -305,6 +320,14 @@ func (s *Server) randomBehaviorMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func chaosExempt(path string) bool {
+	switch path {
+	case "/healthz", "/readyz", "/livez", "/metrics":
+		return true
+	}
+	return false
 }
 
 func (s *Server) randomDelay() time.Duration {
@@ -720,6 +743,11 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 // @Produce      json
 // @Success      200  {object}  ConfigsResponse
 // @Router       /configs [get]
+type configSummary struct {
+	SHA256 string `json:"sha256"`
+	Bytes  int    `json:"bytes"`
+}
+
 func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 	if s.configWatcher == nil {
 		respondJSON(w, http.StatusOK, map[string]any{
@@ -728,10 +756,18 @@ func (s *Server) handleConfigs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Never the values: CONFIG_PATH may hold a mounted Secret. The key names
+	// and a short hash of each value still show a reload (the hash changes)
+	// without publishing anything.
+	configs := make(map[string]configSummary)
+	for key, value := range s.configWatcher.GetAll() {
+		sum := sha256.Sum256([]byte(value))
+		configs[key] = configSummary{SHA256: hex.EncodeToString(sum[:])[:12], Bytes: len(value)}
+	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,
 		"path":    s.cfg.ConfigPath,
-		"configs": s.configWatcher.GetAll(),
+		"configs": configs,
 	})
 }
 
