@@ -106,11 +106,18 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, ok := s.acquireBcryptSlot(w)
+	if !ok {
+		return
+	}
 	user, err := s.users.createUser(r.Context(), req.Username, req.Password)
+	release()
 	if err != nil {
 		switch {
 		case errors.Is(err, errUserExists):
 			respondJSON(w, http.StatusConflict, map[string]string{"error": "user already exists"})
+		case errors.Is(err, errInvalidInput):
+			respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		default:
 			s.logger.Ctx(r.Context()).Error("auth register failed",
 				zap.Error(err),
@@ -157,7 +164,12 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, ok := s.acquireBcryptSlot(w)
+	if !ok {
+		return
+	}
 	user, err := s.users.authenticate(r.Context(), req.Username, req.Password)
+	release()
 	if err != nil {
 		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
 		return
@@ -188,4 +200,20 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"username": username})
+}
+
+// bcrypt costs tens of milliseconds of CPU per check, and the per-username
+// limiter does not stop many usernames at once. At most bcryptSlots checks run
+// in parallel per pod; beyond that the request gets 429 at once instead of
+// queueing and starving the probes of CPU.
+const bcryptSlots = 2
+
+func (s *Server) acquireBcryptSlot(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case s.bcryptSem <- struct{}{}:
+		return func() { <-s.bcryptSem }, true
+	default:
+		respondTooManyRequests(w, time.Second)
+		return nil, false
+	}
 }

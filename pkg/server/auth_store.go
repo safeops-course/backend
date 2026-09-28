@@ -21,6 +21,8 @@ import (
 var (
 	errUserExists         = errors.New("user already exists")
 	errInvalidCredentials = errors.New("invalid username or password")
+	// errInvalidInput marks a request the client must fix (400), not a server fault.
+	errInvalidInput = errors.New("invalid input")
 )
 
 type authUserStore interface {
@@ -130,8 +132,8 @@ func (s *fileUserStore) createUser(_ context.Context, username, password string)
 	if err != nil {
 		return userRecord{}, err
 	}
-	if len(password) < 8 {
-		return userRecord{}, errors.New("password must be at least 8 characters")
+	if err := validatePassword(password); err != nil {
+		return userRecord{}, err
 	}
 
 	s.mu.Lock()
@@ -280,8 +282,8 @@ func (s *postgresUserStore) createUser(ctx context.Context, username, password s
 	if err != nil {
 		return userRecord{}, err
 	}
-	if len(password) < 8 {
-		return userRecord{}, errors.New("password must be at least 8 characters")
+	if err := validatePassword(password); err != nil {
+		return userRecord{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -352,12 +354,25 @@ func (s *postgresUserStore) Close() error {
 func normalizeUsername(username string) (string, error) {
 	trimmed := strings.TrimSpace(username)
 	if len(trimmed) < 3 {
-		return "", errors.New("username must be at least 3 characters")
+		return "", fmt.Errorf("%w: username must be at least 3 characters", errInvalidInput)
 	}
 	if len(trimmed) > 64 {
-		return "", errors.New("username must be at most 64 characters")
+		return "", fmt.Errorf("%w: username must be at most 64 characters", errInvalidInput)
 	}
 	return trimmed, nil
+}
+
+// bcrypt uses at most 72 bytes of a password and refuses longer ones.
+const maxPasswordBytes = 72
+
+func validatePassword(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("%w: password must be at least 8 characters", errInvalidInput)
+	}
+	if len(password) > maxPasswordBytes {
+		return fmt.Errorf("%w: password must be at most %d bytes", errInvalidInput, maxPasswordBytes)
+	}
+	return nil
 }
 
 func hashPassword(password string) (string, error) {
