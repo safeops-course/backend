@@ -64,6 +64,7 @@ type Server struct {
 
 	loginLimiter        *fixedWindowLimiter
 	registrationLimiter *fixedWindowLimiter
+	bcryptSem           chan struct{} // see acquireBcryptSlot
 }
 
 // New constructs a fully configured HTTP server.
@@ -81,6 +82,7 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 		configFingerprintKey: randomKey(32),
 
 		loginLimiter:        newFixedWindowLimiter(cfg.LoginAttemptsPerMinute),
+		bcryptSem:           make(chan struct{}, bcryptSlots),
 		registrationLimiter: newFixedWindowLimiter(cfg.RegistrationsPerMinute),
 	}
 	s.ready.Store(true)
