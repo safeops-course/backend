@@ -62,25 +62,36 @@ func (w *Watcher) OnChange(callback func(key, value string)) {
 // Watch starts watching for file changes in a goroutine
 // Kubernetes kubelet updates ConfigMap/Secret mounts by creating a new ..data symlink
 func (w *Watcher) Watch() {
-	go func() {
-		for {
-			select {
-			case event := <-w.fswatcher.Events:
-				// Kubernetes updates ConfigMaps/Secrets by recreating the ..data symlink
-				if event.Op&fsnotify.Create == fsnotify.Create {
-					if filepath.Base(event.Name) == "..data" {
-						if err := w.updateCache(); err != nil {
-							w.logger.Error("config watcher update failed", zap.Error(err))
-						} else {
-							w.logger.Info("config watcher reloaded", zap.String("dir", w.dir))
-						}
+	go w.loop()
+}
+
+// loop handles events until Close closes the watcher's channels. A receive on a
+// closed channel returns at once, so without the ok checks the loop would spin
+// at 100% CPU after Close (e.g. during shutdown).
+func (w *Watcher) loop() {
+	for {
+		select {
+		case event, ok := <-w.fswatcher.Events:
+			if !ok {
+				return
+			}
+			// Kubernetes updates ConfigMaps/Secrets by recreating the ..data symlink
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				if filepath.Base(event.Name) == "..data" {
+					if err := w.updateCache(); err != nil {
+						w.logger.Error("config watcher update failed", zap.Error(err))
+					} else {
+						w.logger.Info("config watcher reloaded", zap.String("dir", w.dir))
 					}
 				}
-			case err := <-w.fswatcher.Errors:
-				w.logger.Error("config watcher error", zap.String("dir", w.dir), zap.Error(err))
 			}
+		case err, ok := <-w.fswatcher.Errors:
+			if !ok {
+				return
+			}
+			w.logger.Error("config watcher error", zap.String("dir", w.dir), zap.Error(err))
 		}
-	}()
+	}
 }
 
 // Get retrieves a value from the cache
