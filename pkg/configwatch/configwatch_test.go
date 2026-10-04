@@ -4,13 +4,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"github.com/ldbl/sre/backend/pkg/logger"
 	"go.uber.org/zap"
 )
 
 // After Close the loop must return, not spin on the closed channels.
 func TestLoopReturnsAfterClose(t *testing.T) {
-	w, err := NewWatcher(t.TempDir(), otelzap.New(zap.NewNop()))
+	w, err := NewWatcher(t.TempDir(), logger.Wrap(zap.NewNop()))
 	if err != nil {
 		t.Fatal(err)
 	}

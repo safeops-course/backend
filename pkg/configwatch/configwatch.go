@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"github.com/ldbl/sre/backend/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -17,12 +17,12 @@ type Watcher struct {
 	dir       string
 	fswatcher *fsnotify.Watcher
 	Cache     *sync.Map
-	logger    *otelzap.Logger
+	logger    *logger.Logger
 	callbacks []func(key, value string)
 }
 
 // NewWatcher creates a directory watcher that updates the cache when files change
-func NewWatcher(dir string, logger *otelzap.Logger) (*Watcher, error) {
+func NewWatcher(dir string, log *logger.Logger) (*Watcher, error) {
 	if len(dir) < 1 {
 		return nil, errors.New("directory is empty")
 	}
@@ -36,7 +36,7 @@ func NewWatcher(dir string, logger *otelzap.Logger) (*Watcher, error) {
 		dir:       dir,
 		fswatcher: fw,
 		Cache:     new(sync.Map),
-		logger:    logger,
+		logger:    log,
 		callbacks: make([]func(key, value string), 0),
 	}
 

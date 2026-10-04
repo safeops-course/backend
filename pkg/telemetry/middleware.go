@@ -7,11 +7,12 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-// shouldTrace returns true if the request should be traced
-// Filters out health check endpoints to reduce noise
+// shouldTrace returns true if the request should be traced.
+// Probes and Prometheus scrapes are left out: they arrive every few seconds from the kubelet and
+// Prometheus, say nothing about users, and on an idle cluster they would be almost every span.
 func shouldTrace(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/healthz", "/livez", "/readyz":
+	case "/healthz", "/livez", "/readyz", "/metrics":
 		return false
 	default:
 		return true

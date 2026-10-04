@@ -111,6 +111,7 @@ pkg/
 ## Build & Run
 
 ```bash
+make install-hooks  # once per clone: the CI checks as pre-commit/pre-push hooks (.pre-commit-config.yaml)
 make build          # compile to ./bin/backend with ldflags
 make run            # go run with ldflags
 make image          # docker build (multi-stage, alpine)
@@ -156,6 +157,10 @@ Version info (`APP_VERSION`, `APP_COMMIT`, `APP_COMMIT_SHORT`, `APP_BUILD_DATE`)
 reviewed and added there. Never print response bodies of /env in test failures (CI logs).
 
 ## CI/CD
+
+The same checks run locally first: `.pre-commit-config.yaml` (gofmt, go vet, golangci-lint, gitleaks on
+commit; go test -race and govulncheck on push), pinned to the versions in pr.yml - change them together.
+Run them before pushing; do not leave a lint or test failure for CI to find.
 
 - **pr.yml** — on every pull request (all must pass before merge): `go vet`, `go test -race`, `govulncheck` (pinned v1.8.0); golangci-lint v2.14.0 with gosec (`.golangci.yml`, every exclusion commented); `docker build` (no push); gitleaks v8.30.1 on the PR commits (`.gitleaks.toml`: default rules, NO allowlist; a planted test secret is allowed per line with an inline `gitleaks:allow` comment - a path allowlist with `condition = "AND"` let every secret in `_test.go` through)
 - **build.yml** — on push to main/develop: govulncheck, build each published platform (linux/amd64, linux/arm64) locally and **Trivy-scan it before anything is pushed** (blocking on fixable CRITICAL/HIGH), then push exactly those scanned images and join them into one multi-platform index (`docker buildx imagetools create`, no second build), cosign sign + SBOM attestation on the index digest + SLSA build provenance (`actions/attest-build-provenance`, verify with `gh attestation verify`)
