@@ -21,7 +21,7 @@ LDFLAGS := -s -w \
 	-X github.com/ldbl/sre/backend/pkg/version.ShortCommit=$(APP_COMMIT_SHORT) \
 	-X github.com/ldbl/sre/backend/pkg/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: build run image publish
+.PHONY: build run image publish install-hooks
 
 build:
 	@mkdir -p $(BIN_DIR)
@@ -53,3 +53,6 @@ publish: image ## Push the backend image to the configured registry
 	fi
 	@echo "[publish] Pushing $(REMOTE_IMAGE)"
 	docker push $(REMOTE_IMAGE)
+
+install-hooks: ## Install the pre-commit and pre-push hooks (.pre-commit-config.yaml) - the CI checks, locally
+	pre-commit install
