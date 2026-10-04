@@ -22,7 +22,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -140,7 +139,7 @@ func setupExport(ctx context.Context, dsn, serviceName, serviceVersion, deployme
 
 	otel.SetTracerProvider(tracerProvider)
 	otel.SetMeterProvider(meterProvider)
-	global.SetLoggerProvider(loggerProvider)
+	otel.SetLoggerProvider(loggerProvider)
 
 	// Go runtime metrics (goroutines, memory, GC), as the uptrace-go wrapper used to add.
 	if err := runtime.Start(runtime.WithMeterProvider(meterProvider)); err != nil {

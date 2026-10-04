@@ -8,7 +8,7 @@ import (
 	"os"
 
 	"go.opentelemetry.io/contrib/bridges/otelzap"
-	"go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -46,7 +46,7 @@ func New() *Logger {
 
 // Wrap adds the OpenTelemetry bridge to an existing zap logger (tests use zap.NewExample or NewNop).
 func Wrap(zapLogger *zap.Logger) *Logger {
-	bridge := zapcore.Core(otelzap.NewCore(scopeName, otelzap.WithLoggerProvider(global.GetLoggerProvider())))
+	bridge := zapcore.Core(otelzap.NewCore(scopeName, otelzap.WithLoggerProvider(otel.GetLoggerProvider())))
 	// Debug stays local: only Info and above are worth sending.
 	bridge, err := zapcore.NewIncreaseLevelCore(bridge, zapcore.InfoLevel)
 	if err != nil {

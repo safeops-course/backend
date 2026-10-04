@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/log/logtest"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -16,9 +16,9 @@ import (
 // OpenTelemetry is linked to the same span.
 func TestCtxLinksStdoutAndOpenTelemetryToTheSpan(t *testing.T) {
 	recorder := logtest.NewRecorder()
-	previous := global.GetLoggerProvider()
-	global.SetLoggerProvider(recorder)
-	t.Cleanup(func() { global.SetLoggerProvider(previous) })
+	previous := otel.GetLoggerProvider()
+	otel.SetLoggerProvider(recorder)
+	t.Cleanup(func() { otel.SetLoggerProvider(previous) })
 
 	core, stdout := observer.New(zap.DebugLevel)
 	log := Wrap(zap.New(core))
@@ -54,9 +54,9 @@ func TestCtxLinksStdoutAndOpenTelemetryToTheSpan(t *testing.T) {
 // Debug lines stay on stdout; only Info and above go to OpenTelemetry.
 func TestDebugIsNotSentToOpenTelemetry(t *testing.T) {
 	recorder := logtest.NewRecorder()
-	previous := global.GetLoggerProvider()
-	global.SetLoggerProvider(recorder)
-	t.Cleanup(func() { global.SetLoggerProvider(previous) })
+	previous := otel.GetLoggerProvider()
+	otel.SetLoggerProvider(recorder)
+	t.Cleanup(func() { otel.SetLoggerProvider(previous) })
 
 	core, stdout := observer.New(zap.DebugLevel)
 	Wrap(zap.New(core)).Ctx(context.Background()).Debug("debug only")
