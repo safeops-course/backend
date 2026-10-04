@@ -25,11 +25,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/ldbl/sre/backend/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
-	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
 	"github.com/ldbl/sre/backend/pkg/config"
@@ -51,7 +51,7 @@ type Server struct {
 
 	cfg           config.Config
 	router        chi.Router
-	logger        *otelzap.Logger
+	logger        *logger.Logger
 	registry      *prometheus.Registry
 	requests      *prometheus.CounterVec
 	duration      *prometheus.HistogramVec
@@ -70,14 +70,14 @@ type Server struct {
 }
 
 // New constructs a fully configured HTTP server.
-func New(cfg config.Config, logger *otelzap.Logger) *Server {
-	if logger == nil {
-		logger = otelzap.New(zap.NewExample())
+func New(cfg config.Config, log *logger.Logger) *Server {
+	if log == nil {
+		log = logger.Wrap(zap.NewExample())
 	}
 
 	s := &Server{
 		cfg:      cfg,
-		logger:   logger,
+		logger:   log,
 		registry: prometheus.NewRegistry(),
 		randSrc:  rand.New(rand.NewSource(time.Now().UnixNano())),
 
@@ -91,22 +91,22 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 	s.live.Store(true)
 
 	if err := cfg.Validate(); err != nil {
-		logger.Fatal("invalid configuration", zap.Error(err))
+		log.Fatal("invalid configuration", zap.Error(err))
 	}
 
 	if strings.TrimSpace(cfg.DatabaseURL) != "" {
 		users, err := newPostgresUserStore(cfg.DatabaseURL)
 		if err != nil {
-			logger.Fatal("failed to initialize postgres auth store", zap.Error(err))
+			log.Fatal("failed to initialize postgres auth store", zap.Error(err))
 		}
 		s.users = users
-		logger.Info("initialized auth store", zap.String("backend", "postgres"))
+		log.Info("initialized auth store", zap.String("backend", "postgres"))
 	} else {
 		// Inside Kubernetes a file store is a trap: every pod has its own /tmp,
 		// so a user registered on one replica cannot log in on another, and a
 		// restart loses everyone. Fail loudly instead; locally the file stays.
 		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
-			logger.Fatal("no database configured (DATABASE_URL / POSTGRES_*) - refusing the per-pod file auth store inside Kubernetes")
+			log.Fatal("no database configured (DATABASE_URL / POSTGRES_*) - refusing the per-pod file auth store inside Kubernetes")
 		}
 		authStorePath := strings.TrimSpace(cfg.AuthDBPath)
 		if authStorePath == "" {
@@ -122,7 +122,7 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 				}
 				rewrittenPath = filepath.Join("/tmp", safeName)
 			}
-			logger.Warn("AUTH_DB_PATH is relative; rewriting to writable /tmp path",
+			log.Warn("AUTH_DB_PATH is relative; rewriting to writable /tmp path",
 				zap.String("original_path", authStorePath),
 				zap.String("rewritten_path", rewrittenPath),
 			)
@@ -131,10 +131,10 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 
 		users, err := newFileUserStore(authStorePath)
 		if err != nil {
-			logger.Fatal("failed to initialize file auth store", zap.Error(err), zap.String("path", authStorePath))
+			log.Fatal("failed to initialize file auth store", zap.Error(err), zap.String("path", authStorePath))
 		}
 		s.users = users
-		logger.Warn("DATABASE_URL not set, using file-based auth store", zap.String("path", authStorePath))
+		log.Warn("DATABASE_URL not set, using file-based auth store", zap.String("path", authStorePath))
 	}
 
 	s.requests = prometheus.NewCounterVec(
@@ -173,15 +173,15 @@ func New(cfg config.Config, logger *otelzap.Logger) *Server {
 
 	// Initialize config watcher if config path is set
 	if cfg.ConfigPath != "" {
-		watcher, err := configwatch.NewWatcher(cfg.ConfigPath, logger)
+		watcher, err := configwatch.NewWatcher(cfg.ConfigPath, log)
 		if err != nil {
-			logger.Warn("failed to initialize config watcher", zap.Error(err), zap.String("path", cfg.ConfigPath))
+			log.Warn("failed to initialize config watcher", zap.Error(err), zap.String("path", cfg.ConfigPath))
 		} else {
 			s.configWatcher = watcher
 			// Register callback for config changes
 			watcher.OnChange(func(key, _ string) {
 				// The key only: CONFIG_PATH may hold a mounted Secret, and logs reach Uptrace.
-				logger.Info("config changed", zap.String("key", key))
+				log.Info("config changed", zap.String("key", key))
 			})
 			watcher.Watch()
 		}
@@ -305,13 +305,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			zap.Int("status", recorder.status),
 			zap.Duration("duration", time.Since(start)),
 		}
-		// trace_id in the log line itself, so a line found with kubectl logs leads to its trace.
-		// (otelzap.Ctx links the record it sends to Uptrace with the span, but does not add the id
-		// to the zap output.)
-		if traceID := traceIDFromContext(r.Context()); traceID != "" {
-			fields = append(fields, zap.String("trace_id", traceID))
-		}
-
+		// Ctx adds trace_id and span_id to the line and links the OpenTelemetry record to the span.
 		s.logger.Ctx(r.Context()).Info("request", fields...)
 	})
 }

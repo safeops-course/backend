@@ -13,9 +13,12 @@ The backend sends:
 ## Initialization
 
 - `cmd/api/main.go` calls `telemetry.Init(ctx)` at startup, before the logger is created.
-- With `UPTRACE_DSN` set, uptrace-go configures traces, metrics and logs and exports them to Uptrace.
+- With `UPTRACE_DSN` set, the plain OpenTelemetry SDK exports traces, metrics and logs over OTLP/HTTP to
+  the DSN's host (`api.uptrace.dev`), with the whole DSN in the `uptrace-dsn` header, gzip, and delta
+  temporality for counters and histograms - the setup Uptrace documents as "OTLP". (The uptrace-go
+  wrapper was dropped: it lagged behind the SDK and pinned log packages with known vulnerabilities.)
 - Without `UPTRACE_DSN` the service runs without remote export and logs that it does.
-- On shutdown `uptrace.Shutdown(ctx)` flushes what is buffered.
+- Export errors are logged (`OpenTelemetry error: ...`); on shutdown the providers flush what is buffered.
 
 Resource attributes:
 - `service.name` (default `backend`)
@@ -45,11 +48,11 @@ status to ERROR).
 
 ## Logs and correlation
 
-- `pkg/logger/logger.go` wraps zap with `otelzap`.
-- Calls through `logger.Ctx(ctx)` also send an OpenTelemetry log record, linked to the active span.
-  Calls without a context write only to stdout.
-- The request log (`loggingMiddleware`) and `/panic` add `trace_id` to the log line itself
-  (`traceIDFromContext`), so a line found with `kubectl logs` leads to its trace.
+- `pkg/logger/logger.go`: zap, teed into the official OpenTelemetry bridge
+  (`go.opentelemetry.io/contrib/bridges/otelzap`) - every record at Info and above also goes to the
+  global LoggerProvider (Uptrace when `UPTRACE_DSN` is set).
+- `logger.Ctx(ctx)` links the OpenTelemetry record to the request's span and adds `trace_id` and
+  `span_id` to the stdout line, so a line found with `kubectl logs` leads to its trace.
 - Startup and fatal logs run outside a request and have no `trace_id`.
 
 ## Metrics
@@ -69,7 +72,7 @@ Custom `prometheus.Registry` in `Server`:
 - `http.server.request.duration` and the request/response body sizes - from `otelhttp`;
   `metricsMiddleware` adds `http.route` (the chi pattern) through otelhttp's labeler.
 - `db.client.operation.duration` - from `otelpgx`.
-- Go runtime metrics - from uptrace-go.
+- Go runtime metrics - from `go.opentelemetry.io/contrib/instrumentation/runtime`.
 
 ## Configuration
 
