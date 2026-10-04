@@ -12,25 +12,19 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ldbl/sre/backend/pkg/version"
 )
-
-// Metrics holds OpenTelemetry metric instruments
-type Metrics struct {
-	RequestCounter  metric.Int64Counter
-	ErrorCounter    metric.Int64Counter
-	RequestDuration metric.Float64Histogram
-}
-
-var metrics *Metrics
 
 // Init initializes OpenTelemetry with Uptrace Cloud
 func Init(ctx context.Context) func() {
 	// Get service configuration from environment
 	serviceName := getEnv("SERVICE_NAME", "backend")
-	serviceVersion := getEnv("SERVICE_VERSION", "v1.0.0")
+	// The version baked in at build time (ldflags, the image tag) - so every span says which release
+	// produced it. SERVICE_VERSION still overrides it when set.
+	serviceVersion := getEnv("SERVICE_VERSION", version.Version)
 	deploymentEnv := getEnv("DEPLOYMENT_ENVIRONMENT", "development")
 	uptraceDSN := os.Getenv("UPTRACE_DSN")
 
@@ -54,9 +48,6 @@ func Init(ctx context.Context) func() {
 
 	log.Printf("OpenTelemetry initialized: service=%s version=%s env=%s", serviceName, serviceVersion, deploymentEnv)
 
-	// Initialize OTel metrics
-	initMetrics()
-
 	// Return shutdown function
 	return func() {
 		if uptraceDSN == "" {
@@ -65,69 +56,6 @@ func Init(ctx context.Context) func() {
 		if err := uptrace.Shutdown(ctx); err != nil {
 			log.Printf("Error shutting down Uptrace: %v", err)
 		}
-	}
-}
-
-// initMetrics creates OpenTelemetry metric instruments
-func initMetrics() {
-	meter := otel.Meter("backend")
-
-	requestCounter, err := meter.Int64Counter(
-		"backend.requests.total",
-		metric.WithDescription("Total number of requests processed"),
-		metric.WithUnit("{request}"),
-	)
-	if err != nil {
-		log.Printf("Failed to create request counter: %v", err)
-	}
-
-	errorCounter, err := meter.Int64Counter(
-		"backend.errors.total",
-		metric.WithDescription("Total number of errors"),
-		metric.WithUnit("{error}"),
-	)
-	if err != nil {
-		log.Printf("Failed to create error counter: %v", err)
-	}
-
-	requestDuration, err := meter.Float64Histogram(
-		"backend.request.duration",
-		metric.WithDescription("Request duration in seconds"),
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		log.Printf("Failed to create duration histogram: %v", err)
-	}
-
-	metrics = &Metrics{
-		RequestCounter:  requestCounter,
-		ErrorCounter:    errorCounter,
-		RequestDuration: requestDuration,
-	}
-}
-
-// GetMetrics returns the metrics instance
-func GetMetrics() *Metrics {
-	return metrics
-}
-
-// RecordRequest records a request metric using OTel semantic conventions.
-func RecordRequest(ctx context.Context, method, path string, statusCode int, duration float64) {
-	if metrics == nil {
-		return
-	}
-
-	attrs := []attribute.KeyValue{
-		attribute.String("http.request.method", method),
-		attribute.String("http.route", path),
-		attribute.Int("http.response.status_code", statusCode),
-	}
-
-	metrics.RequestCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-	metrics.RequestDuration.Record(ctx, duration, metric.WithAttributes(attrs...))
-
-	if statusCode >= 500 {
-		metrics.ErrorCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
 	}
 }
 

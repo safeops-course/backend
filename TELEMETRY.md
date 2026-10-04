@@ -20,7 +20,7 @@ Backend праща:
 
 Ресурсни атрибути:
 - `service.name` (по подразбиране `backend`)
-- `service.version` (по подразбиране `v1.0.0`)
+- `service.version` (по подразбиране версията от build-а, `version.Version` - същата като `/version`)
 - `deployment.environment.name` (по подразбиране `development`)
 
 ## Tracing
@@ -28,7 +28,7 @@ Backend праща:
 HTTP tracing:
 - `pkg/telemetry/middleware.go` използва `otelhttp.NewHandler`.
 - Име на span: `METHOD /path` (пример: `GET /version`).
-- Филтър за шум: не се trace-ват `/healthz`, `/readyz`, `/livez`.
+- Филтър за шум: не се trace-ват `/healthz`, `/readyz`, `/livez` и `/metrics` (probes и Prometheus scrapes).
 
 Propagation:
 - Глобално е включен W3C propagation:
@@ -73,14 +73,15 @@ Trace корелация в runtime логове:
 - `app_http_in_flight_requests`
 - Go/process collectors
 
-### OpenTelemetry meter инструменти
+### OpenTelemetry метрики
 
-Създават се в `pkg/telemetry/telemetry.go`:
-- `backend.requests.total` (counter)
-- `backend.errors.total` (counter)
-- `backend.request.duration` (histogram)
+- `http.server.request.duration` (и размерите на request/response) - от `otelhttp`; `metricsMiddleware`
+  добавя `http.route` (chi route pattern) през labeler-а на otelhttp, така че метриката е по route.
+- `db.client.operation.duration` - от `otelpgx`.
+- Go runtime метрики - от uptrace-go.
 
-`telemetry.RecordRequest(...)` инкрементира тези метрики, когато бъде извикан.
+Собствените `backend.requests.total`, `backend.errors.total` и `backend.request.duration` са махнати:
+повтаряха метриката на otelhttp.
 
 ## CORS и trace headers
 
@@ -103,5 +104,5 @@ Trace корелация в runtime логове:
 
 1. Backend стартира и логва `OpenTelemetry initialized` или съобщение за липсващ `UPTRACE_DSN`.
 2. Заявка към endpoint като `/version` се вижда в Uptrace като HTTP span.
-3. Request логът за същата заявка съдържа `trace_id` и `span_id`.
+3. Request логът за същата заявка съдържа `trace_id` (и в `kubectl logs`, и в записа в Uptrace).
 4. `/metrics` връща `app_http_requests_total` и `app_http_request_duration_seconds`.

@@ -35,6 +35,8 @@ import (
 	"github.com/ldbl/sre/backend/pkg/config"
 	"github.com/ldbl/sre/backend/pkg/configwatch"
 	"github.com/ldbl/sre/backend/pkg/telemetry"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
 
 	_ "github.com/ldbl/sre/backend/pkg/api/docs" // swagger docs
 )
@@ -277,8 +279,11 @@ func (s *Server) metricsMiddleware(next http.Handler) http.Handler {
 		s.duration.WithLabelValues(r.Method, path).Observe(duration)
 		s.requests.WithLabelValues(r.Method, path, strconv.Itoa(recorder.status)).Inc()
 
-		// Record OTel metrics
-		telemetry.RecordRequest(r.Context(), r.Method, path, recorder.status, duration)
+		// The route on otelhttp's own metric (http.server.request.duration): otelhttp measures the
+		// request but does not know chi's route pattern; it reads the labeler once this handler returns.
+		if labeler, ok := otelhttp.LabelerFromContext(r.Context()); ok {
+			labeler.Add(attribute.String("http.route", path))
+		}
 	})
 }
 
@@ -300,8 +305,13 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			zap.Int("status", recorder.status),
 			zap.Duration("duration", time.Since(start)),
 		}
+		// trace_id in the log line itself, so a line found with kubectl logs leads to its trace.
+		// (otelzap.Ctx links the record it sends to Uptrace with the span, but does not add the id
+		// to the zap output.)
+		if traceID := traceIDFromContext(r.Context()); traceID != "" {
+			fields = append(fields, zap.String("trace_id", traceID))
+		}
 
-		// otelzap.Ctx auto-injects trace_id/span_id
 		s.logger.Ctx(r.Context()).Info("request", fields...)
 	})
 }

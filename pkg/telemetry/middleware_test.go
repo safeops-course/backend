@@ -39,3 +39,30 @@ func TestSpanNameIsRoutePattern(t *testing.T) {
 		}
 	}
 }
+
+// Probes and Prometheus scrapes make no spans; a user request does.
+func TestProbesAndScrapesAreNotTraced(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)))
+	t.Cleanup(func() { otel.SetTracerProvider(previous) })
+
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware)
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+	for _, path := range []string{"/healthz", "/livez", "/readyz", "/metrics", "/version"} {
+		r.Get(path, ok)
+	}
+
+	for _, path := range []string{"/healthz", "/livez", "/readyz", "/metrics", "/version"} {
+		r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	spans := recorder.Ended()
+	if len(spans) != 1 || spans[0].Name() != "GET /version" {
+		var names []string
+		for _, s := range spans {
+			names = append(names, s.Name())
+		}
+		t.Fatalf("spans %v, want only [GET /version]", names)
+	}
+}
