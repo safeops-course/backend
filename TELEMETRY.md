@@ -17,6 +17,9 @@ The backend sends:
   the DSN's host (`api.uptrace.dev`), with the whole DSN in the `uptrace-dsn` header, gzip, and delta
   temporality for counters and histograms - the setup Uptrace documents as "OTLP". (The uptrace-go
   wrapper was dropped: it lagged behind the SDK and pinned log packages with known vulnerabilities.)
+- The DSN's scheme decides the transport: `https://` uses TLS; `http://` (a self-hosted Uptrace) sends
+  plain HTTP, and a DSN with a token over `http://` is accepted only to a loopback host - anywhere else
+  the token would cross the network unencrypted, so export stays off and the reason is logged.
 - Without `UPTRACE_DSN` the service runs without remote export and logs that it does.
 - Export errors are logged (`OpenTelemetry error: ...`); on shutdown the providers flush what is buffered.
 

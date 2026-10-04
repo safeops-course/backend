@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -76,11 +77,10 @@ func Init(ctx context.Context) func() {
 // The DSN (https://<token>@api.uptrace.dev?grpc=4317) gives the endpoint host and is sent whole as
 // the uptrace-dsn header, as Uptrace documents.
 func setupExport(ctx context.Context, dsn, serviceName, serviceVersion, deploymentEnv string) (func(context.Context) error, error) {
-	parsed, err := url.Parse(dsn)
-	if err != nil || parsed.Host == "" {
-		return nil, fmt.Errorf("UPTRACE_DSN is not a URL with a host")
+	endpoint, insecure, err := exportTarget(dsn)
+	if err != nil {
+		return nil, err
 	}
-	endpoint := parsed.Host
 	headers := map[string]string{"uptrace-dsn": dsn}
 
 	res, err := resource.New(ctx,
@@ -97,11 +97,15 @@ func setupExport(ctx context.Context, dsn, serviceName, serviceVersion, deployme
 		return nil, fmt.Errorf("resource: %w", err)
 	}
 
-	traceExporter, err := otlptracehttp.New(ctx,
+	traceOpts := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(endpoint),
 		otlptracehttp.WithHeaders(headers),
 		otlptracehttp.WithCompression(otlptracehttp.GzipCompression),
-	)
+	}
+	if insecure {
+		traceOpts = append(traceOpts, otlptracehttp.WithInsecure())
+	}
+	traceExporter, err := otlptracehttp.New(ctx, traceOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("trace exporter: %w", err)
 	}
@@ -110,12 +114,16 @@ func setupExport(ctx context.Context, dsn, serviceName, serviceVersion, deployme
 		sdktrace.WithResource(res),
 	)
 
-	metricExporter, err := otlpmetrichttp.New(ctx,
+	metricOpts := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(endpoint),
 		otlpmetrichttp.WithHeaders(headers),
 		otlpmetrichttp.WithCompression(otlpmetrichttp.GzipCompression),
 		otlpmetrichttp.WithTemporalitySelector(preferDelta),
-	)
+	}
+	if insecure {
+		metricOpts = append(metricOpts, otlpmetrichttp.WithInsecure())
+	}
+	metricExporter, err := otlpmetrichttp.New(ctx, metricOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("metric exporter: %w", err)
 	}
@@ -124,11 +132,15 @@ func setupExport(ctx context.Context, dsn, serviceName, serviceVersion, deployme
 		sdkmetric.WithResource(res),
 	)
 
-	logExporter, err := otlploghttp.New(ctx,
+	logOpts := []otlploghttp.Option{
 		otlploghttp.WithEndpoint(endpoint),
 		otlploghttp.WithHeaders(headers),
 		otlploghttp.WithCompression(otlploghttp.GzipCompression),
-	)
+	}
+	if insecure {
+		logOpts = append(logOpts, otlploghttp.WithInsecure())
+	}
+	logExporter, err := otlploghttp.New(ctx, logOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("log exporter: %w", err)
 	}
@@ -153,6 +165,36 @@ func setupExport(ctx context.Context, dsn, serviceName, serviceVersion, deployme
 			loggerProvider.Shutdown(ctx),
 		)
 	}, nil
+}
+
+// exportTarget returns the OTLP endpoint (host[:port]) and whether to send it plain HTTP, from the DSN.
+// https:// - TLS (Uptrace Cloud). http:// - plain HTTP for a self-hosted Uptrace, but a DSN carries its
+// token as the user part, so plain HTTP is accepted only to a loopback host: anywhere else the token
+// would cross the network unencrypted. Any other scheme is refused.
+func exportTarget(dsn string) (endpoint string, insecure bool, err error) {
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Host == "" {
+		return "", false, fmt.Errorf("UPTRACE_DSN is not a URL with a host")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return parsed.Host, false, nil
+	case "http":
+		if parsed.User != nil && !isLoopback(parsed.Hostname()) {
+			return "", false, fmt.Errorf("UPTRACE_DSN uses http:// with a token for %s: use https://, or plain HTTP only to localhost", parsed.Hostname())
+		}
+		return parsed.Host, true, nil
+	default:
+		return "", false, fmt.Errorf("UPTRACE_DSN scheme %q is not http or https", parsed.Scheme)
+	}
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // preferDelta sends counters and histograms as deltas, which Uptrace prefers; the rest stays
