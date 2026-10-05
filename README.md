@@ -47,7 +47,7 @@ Reference API service for the SRE Control Plane, part of the [SafeOps Academy](h
 | `/openapi` | GET | OpenAPI 3 JSON spec |
 | `/swagger/*` | GET | Swagger UI |
 | `/auth/register` | POST | Create user and return JWT (`AUTH_REGISTRATION_ENABLED`, rate limited) |
-| `/auth/login` | POST | Login and return JWT (rate limited per username; at most 2 bcrypt checks per pod at once, beyond that 429) |
+| `/auth/login` | POST | Login and return JWT (rate limited per username; at most 2 bcrypt checks per pod at once, beyond that 429). Wrong credentials: 401; the user store failing (the database down): 500, logged - so it counts against the error budget |
 | `/auth/me` | GET | Return current authenticated user |
 | `/token/validate` | GET | Validate a bearer token |
 
