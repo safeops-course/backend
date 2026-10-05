@@ -171,7 +171,18 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	user, err := s.users.authenticate(r.Context(), req.Username, req.Password)
 	release()
 	if err != nil {
-		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
+		// Wrong credentials are the user's 401. Anything else - the database down, a query
+		// that failed - is ours: a 500, logged, so it counts as a failed request in the
+		// error-budget SLO instead of looking like a wrong password.
+		if errors.Is(err, errInvalidCredentials) {
+			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
+			return
+		}
+		s.logger.Ctx(r.Context()).Error("auth login failed",
+			zap.Error(err),
+			zap.String("request_id", chimiddleware.GetReqID(r.Context())),
+		)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to log in"})
 		return
 	}
 

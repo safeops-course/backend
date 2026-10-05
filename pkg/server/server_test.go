@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -198,6 +199,36 @@ func TestAuthRegisterReturnsGenericInternalError(t *testing.T) {
 		t.Fatalf("response leaked internal error details: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "unable to create user") {
+		t.Fatalf("expected generic error message, got %s", rec.Body.String())
+	}
+}
+
+func TestAuthLoginSeparatesStoreErrorsFromBadCredentials(t *testing.T) {
+	login := func(storeErr error) *httptest.ResponseRecorder {
+		srv := newTestServer(t)
+		srv.users = &testUserStore{authenticateErr: storeErr}
+		req := httptest.NewRequest(http.MethodPost, "/auth/login",
+			strings.NewReader(`{"username":"alice","password":"password123"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Wrong credentials: the user's mistake, a 401.
+	if rec := login(errInvalidCredentials); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid credentials, got %d", rec.Code)
+	}
+
+	// The store failed (the database is down): ours, a 500 - generic, no details leaked.
+	rec := login(fmt.Errorf("query user: %w", errors.New("dial tcp: connection refused to app-postgres-rw")))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when the store fails, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "connection refused") || strings.Contains(rec.Body.String(), "app-postgres") {
+		t.Fatalf("response leaked internal error details: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unable to log in") {
 		t.Fatalf("expected generic error message, got %s", rec.Body.String())
 	}
 }
