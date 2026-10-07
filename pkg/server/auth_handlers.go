@@ -20,13 +20,26 @@ type authContextKey string
 const authenticatedUserContextKey authContextKey = "authenticatedUser"
 
 type authCredentialsRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name,omitempty"` // register only; optional (schema 2)
 }
 
 type authUserResponse struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name,omitempty"` // only with FEATURE_DISPLAY_NAME
+}
+
+// userResponse is what register and login return about the user. The display name is written on
+// every register (schema 2), but read back only when FEATURE_DISPLAY_NAME is on: the flag switches the
+// read side without a deploy, and switching it off hides it again - the expand step's safety net.
+func (s *Server) userResponse(user userRecord) authUserResponse {
+	resp := authUserResponse{ID: user.ID, Username: user.Username}
+	if s.cfg.FeatureDisplayName {
+		resp.DisplayName = user.DisplayName
+	}
+	return resp
 }
 
 type authResponse struct {
@@ -110,7 +123,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	user, err := s.users.createUser(r.Context(), req.Username, req.Password)
+	user, err := s.users.createUser(r.Context(), req.Username, req.Password, req.DisplayName)
 	release()
 	if err != nil {
 		switch {
@@ -139,10 +152,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, authResponse{
 		Token:     token,
 		ExpiresAt: expiresAt.Format(timeRFC3339),
-		User: authUserResponse{
-			ID:       user.ID,
-			Username: user.Username,
-		},
+		User:      s.userResponse(user),
 	})
 }
 
@@ -196,10 +206,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, authResponse{
 		Token:     token,
 		ExpiresAt: expiresAt.Format(timeRFC3339),
-		User: authUserResponse{
-			ID:       user.ID,
-			Username: user.Username,
-		},
+		User:      s.userResponse(user),
 	})
 }
 

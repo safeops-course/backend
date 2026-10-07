@@ -55,6 +55,71 @@ jobs:
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
+  # Expand / contract, checked (Chapter 18): the previous release - the base branch - must keep working
+  # on the schema this pull request migrates to. That is what makes rolling back the image safe
+  # without rolling back the data. Black-box on purpose: build both binaries, migrate with the new
+  # one, run the old one against the result, register and log in through its HTTP API.
+  previous-release:
+    name: previous release on this schema (N-1)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17@sha256:ae69c452f483507a6b99fb654cf93aad7fe156ffd2c56247707eef4e36d3c12b
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres?sslmode=disable
+      JWT_SECRET: n-minus-1-check-only-0123456789abcdef
+    steps:
+      - name: Checkout this pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the previous release (the base branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: previous
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build both binaries
+        run: |
+          go build -o "${RUNNER_TEMP}/new-backend" ./cmd/api
+          (cd previous && go build -o "${RUNNER_TEMP}/previous-backend" ./cmd/api)
+
+      - name: Migrate with this pull request
+        run: '"${RUNNER_TEMP}/new-backend" migrate'
+
+      - name: The previous release starts, registers and logs in on that schema
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/previous-backend" > "${RUNNER_TEMP}/previous.log" 2>&1 &
+          pid=$!
+          trap 'kill "${pid}" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:8080/readyz && break
+            sleep 1
+          done
+          if ! curl -sf -o /dev/null http://localhost:8080/readyz; then
+            echo "::error::the previous release did not become ready on this schema"; cat "${RUNNER_TEMP}/previous.log"; exit 1
+          fi
+          body='{"username":"nminus1","password":"n-minus-1-password"}'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "${body}" http://localhost:8080/auth/register)
+          [[ "${code}" == 201 ]] || { echo "::error::previous release: register ${code}, want 201"; cat "${RUNNER_TEMP}/previous.log"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "${body}" http://localhost:8080/auth/login)
+          [[ "${code}" == 200 ]] || { echo "::error::previous release: login ${code}, want 200"; cat "${RUNNER_TEMP}/previous.log"; exit 1; }
+          echo "previous release (${{ github.event.pull_request.base.ref }}) works on this pull request's schema"
+
   lint:
     name: lint (golangci-lint + gosec)
     runs-on: ubuntu-latest

@@ -378,7 +378,7 @@ type testUserStore struct {
 	closed          bool
 }
 
-func (s *testUserStore) createUser(_ context.Context, username, _ string) (userRecord, error) {
+func (s *testUserStore) createUser(_ context.Context, username, _, _ string) (userRecord, error) {
 	if s.createUserErr != nil {
 		return userRecord{}, s.createUserErr
 	}
