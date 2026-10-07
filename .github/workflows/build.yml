@@ -145,6 +145,11 @@ jobs:
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
+          # The runtime stage is never taken from the cache: its `apk upgrade` must run on every build, or
+          # a cached layer keeps an old package until the base image changes (frontend: pcre2 CVE,
+          # 2026-10-07). pull: the newest base image of the pinned tag, for the same reason.
+          no-cache-filters: runtime
+          pull: true
           platforms: linux/amd64
 
       - name: Trivy scan linux/amd64 (blocking, before push)
@@ -179,6 +184,11 @@ jobs:
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
+          # The runtime stage is never taken from the cache: its `apk upgrade` must run on every build, or
+          # a cached layer keeps an old package until the base image changes (frontend: pcre2 CVE,
+          # 2026-10-07). pull: the newest base image of the pinned tag, for the same reason.
+          no-cache-filters: runtime
+          pull: true
           platforms: linux/arm64
 
       - name: Trivy scan linux/arm64 (blocking, before push)
