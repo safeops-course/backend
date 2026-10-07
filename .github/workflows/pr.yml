@@ -84,7 +84,7 @@ jobs:
       - name: Checkout the previous release (the base branch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event.pull_request.base.sha }}   # the exact base commit, not the moving branch
           path: previous
           persist-credentials: false
 
@@ -101,6 +101,8 @@ jobs:
         run: '"${RUNNER_TEMP}/new-backend" migrate'
 
       - name: The previous release starts, registers and logs in on that schema
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/previous-backend" > "${RUNNER_TEMP}/previous.log" 2>&1 &
@@ -118,7 +120,7 @@ jobs:
           [[ "${code}" == 201 ]] || { echo "::error::previous release: register ${code}, want 201"; cat "${RUNNER_TEMP}/previous.log"; exit 1; }
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "${body}" http://localhost:8080/auth/login)
           [[ "${code}" == 200 ]] || { echo "::error::previous release: login ${code}, want 200"; cat "${RUNNER_TEMP}/previous.log"; exit 1; }
-          echo "previous release (${{ github.event.pull_request.base.ref }}) works on this pull request's schema"
+          echo "previous release (${BASE_REF}) works on this pull request's schema"
 
   lint:
     name: lint (golangci-lint + gosec)

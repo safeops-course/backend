@@ -31,19 +31,42 @@ func registerUser(t *testing.T, srv *Server, body string) authResponse {
 	return resp
 }
 
+// loginUser posts /auth/login and returns the decoded response.
+func loginUser(t *testing.T, srv *Server, body string) authResponse {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", rr.Code, rr.Body.String())
+	}
+	var resp authResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 // The display name is written on register either way; FEATURE_DISPLAY_NAME only decides whether it is
-// read back - so switching the flag off hides it again without a deploy or a data change.
+// read back - in the register and the login response - so switching the flag off hides it again
+// without a deploy or a data change.
 func TestDisplayNameFollowsTheFeatureFlag(t *testing.T) {
-	body := `{"username":"ana","password":"verysecure123","display_name":"  Ana Petrova "}`
+	register := `{"username":"ana","password":"verysecure123","display_name":"  Ana Petrova "}`
+	login := `{"username":"ana","password":"verysecure123"}`
 
 	off := newTestServer(t)
-	if got := registerUser(t, off, body).User.DisplayName; got != "" {
-		t.Fatalf("flag off: display_name %q in the response, want none", got)
+	if got := registerUser(t, off, register).User.DisplayName; got != "" {
+		t.Fatalf("flag off, register: display_name %q in the response, want none", got)
+	}
+	if got := loginUser(t, off, login).User.DisplayName; got != "" {
+		t.Fatalf("flag off, login: display_name %q in the response, want none", got)
 	}
 
 	on := newTestServer(t, func(c *config.Config) { c.FeatureDisplayName = true })
-	if got := registerUser(t, on, body).User.DisplayName; got != "Ana Petrova" {
-		t.Fatalf("flag on: display_name %q, want %q (trimmed)", got, "Ana Petrova")
+	if got := registerUser(t, on, register).User.DisplayName; got != "Ana Petrova" {
+		t.Fatalf("flag on, register: display_name %q, want %q (trimmed)", got, "Ana Petrova")
+	}
+	if got := loginUser(t, on, login).User.DisplayName; got != "Ana Petrova" {
+		t.Fatalf("flag on, login: display_name %q, want %q (read back from the store)", got, "Ana Petrova")
 	}
 }
 
