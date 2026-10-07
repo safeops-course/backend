@@ -31,7 +31,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags "-s -w -X github.com/ldbl/sre/backend/pkg/version.Version=${APP_VERSION} -X github.com/ldbl/sre/backend/pkg/version.Commit=${APP_COMMIT} -X github.com/ldbl/sre/backend/pkg/version.ShortCommit=${APP_COMMIT_SHORT} -X github.com/ldbl/sre/backend/pkg/version.BuildDate=${BUILD_DATE}" \
     -o /out/backend ./cmd/api
 
-FROM alpine:3.24
+FROM alpine:3.24 AS runtime
 
 ARG APP_VERSION
 ARG APP_COMMIT
