@@ -17,6 +17,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	pgxv5 "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -59,8 +60,13 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 	}
 	m, err := migrate.NewWithInstance("iofs", src, "pgx5", driver)
 	if err != nil {
+		_ = driver.Close() // closes the pool too; m does that from here on
 		return 0, 0, fmt.Errorf("migrator: %w", err)
 	}
+	// Replicas started together queue on the advisory lock while one of them migrates: wait as long
+	// as a migration may take, not golang-migrate's default 15 s - an initContainer that gives up
+	// early only restarts and waits again.
+	m.LockTimeout = 5 * time.Minute
 	// Closes the source and the connection pool opened above; nothing useful to do with its errors
 	// once the migration itself has a result.
 	defer func() { _, _ = m.Close() }()
@@ -69,8 +75,25 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 	if err != nil {
 		return 0, 0, err
 	}
+	// m.Up takes no context: when ctx ends (the caller's deadline), ask it to stop after the current
+	// migration instead. done ends the goroutine when Up returns first.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			select {
+			case m.GracefulStop <- true:
+			default:
+			}
+		case <-done:
+		}
+	}()
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return before, 0, fmt.Errorf("migrate up from version %d: %w", before, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return before, 0, fmt.Errorf("migrate up from version %d stopped: %w", before, err)
 	}
 	after, dirty, err := versionOf(m)
 	if err != nil {
