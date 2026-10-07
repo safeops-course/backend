@@ -232,6 +232,12 @@ func envFloat(key string, fallback float64) float64 {
 // buildDatabaseURL returns DATABASE_URL if set, otherwise composes it from
 // POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB.
 // Composing from parts ensures the password is properly URL-encoded.
+// DatabaseURLFromEnv is the Postgres DSN the app would use (DATABASE_URL or POSTGRES_*), for
+// commands that need only the database - `backend migrate`.
+func DatabaseURLFromEnv() string {
+	return buildDatabaseURL()
+}
+
 func buildDatabaseURL() string {
 	if v := envString("DATABASE_URL", ""); v != "" {
 		return v

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ldbl/sre/backend/pkg/migrations"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,39 +249,16 @@ func newPostgresUserStore(databaseURL string) (*postgresUserStore, error) {
 	return store, nil
 }
 
+// ensureSchema refuses to run on a schema this build cannot use. The schema itself is created and
+// changed only by versioned migrations (pkg/migrations), applied by `backend migrate` - the migrate
+// initContainer in Kubernetes - never by the app at startup.
 func (s *postgresUserStore) ensureSchema(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	// Use an advisory lock to prevent concurrent schema creation.
-	// Without this, multiple pods starting simultaneously can race on
-	// BIGSERIAL sequence type creation (pg_type_typname_nsp_index conflict).
-	const schemaStmt = `
-DO $$
-BEGIN
-  PERFORM pg_advisory_lock(hashtext('app_users_schema'));
-
-  CREATE TABLE IF NOT EXISTS app_users (
-    id BIGSERIAL PRIMARY KEY,
-    username VARCHAR(64) NOT NULL,
-    password_hash TEXT NOT NULL,
-    password_salt TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-
-  CREATE UNIQUE INDEX IF NOT EXISTS app_users_username_lower_uq
-    ON app_users ((lower(username)));
-
-  PERFORM pg_advisory_unlock(hashtext('app_users_schema'));
-END;
-$$;
-`
-
-	if _, err := s.db.ExecContext(ctx, schemaStmt); err != nil {
-		return fmt.Errorf("initialize auth table: %w", err)
+	if err := migrations.Check(ctx, s.db); err != nil {
+		return fmt.Errorf("database schema: %w", err)
 	}
-
 	return nil
 }
 

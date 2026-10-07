@@ -121,10 +121,34 @@ Image tags are automatically updated by Flux ImageUpdateAutomation using ImagePo
 
 Database is managed by CloudNativePG (`app-postgres` cluster) with per-environment instances.
 
+## Database Migrations
+
+The schema lives in versioned SQL files, `pkg/migrations/sql/NNNN_name.up.sql`, embedded in the binary.
+
+- `backend migrate` applies the ones the database does not have yet and exits. In Kubernetes it is the
+  Deployment's `migrate` initContainer - the same image (the same signed digest) as the app.
+  golang-migrate holds a Postgres advisory lock, so replicas starting together migrate once.
+- The app never changes the schema. At startup it checks `schema_migrations`: never migrated, dirty,
+  or older than `migrations.RequiredVersion` - it refuses to start, and says why. A **newer** schema
+  is fine: the previous release must keep running after the next one migrated, so rolling back the
+  image never needs a rollback of the data.
+- Only `.up.sql` files. A schema is never rolled back; a mistake is fixed by the next migration.
+  Every migration is compatible with the code of the previous release (expand / contract): add before
+  use, stop using before remove. Chapter 18 of the course walks through it.
+- A new file needs `RequiredVersion` raised in `pkg/migrations/migrations.go` - a test fails otherwise.
+
+The migration tests need a real Postgres (CI starts one); without `TEST_DATABASE_URL` they skip:
+
+```bash
+docker run -d --rm --name pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17
+TEST_DATABASE_URL='postgres://postgres:test@localhost:55432/postgres?sslmode=disable' go test ./pkg/migrations/
+```
+
 ## Local Development
 
 ```bash
-go run ./cmd/api
+go run ./cmd/api              # file-based auth store, no database
+# with Postgres: DATABASE_URL=... go run ./cmd/api migrate && DATABASE_URL=... go run ./cmd/api
 ```
 
 ## Docker
