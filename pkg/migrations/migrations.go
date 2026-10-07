@@ -36,6 +36,12 @@ const RequiredVersion uint = 1
 // versionTable is golang-migrate's bookkeeping table: one row, the version and a dirty flag.
 const versionTable = "schema_migrations"
 
+// lockWait is how long a migrate run waits for the advisory lock - replicas started together queue on
+// it while one of them migrates. Postgres enforces it (lock_timeout on the connection): the driver
+// waits for the lock with no context of its own, so only the server can cancel that query. A var, so
+// the test can shorten it.
+var lockWait = 5 * time.Minute
+
 // Up applies every migration this binary embeds that the database does not have yet. golang-migrate
 // holds a Postgres advisory lock while it runs, so replicas starting together migrate once. It
 // opens its own connection pool to databaseURL and closes it; it returns the version before and after.
@@ -48,6 +54,12 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 	if err != nil {
 		return 0, 0, fmt.Errorf("parse database URL: %w", err)
 	}
+	// lock_timeout cancels a wait for the advisory lock (and for any lock a migration's DDL needs)
+	// on the server - so the waiting query has ended before m.Close() below closes the connection.
+	if pgxCfg.RuntimeParams == nil {
+		pgxCfg.RuntimeParams = map[string]string{}
+	}
+	pgxCfg.RuntimeParams["lock_timeout"] = fmt.Sprintf("%d", lockWait.Milliseconds())
 	db := stdlib.OpenDB(*pgxCfg) // closed by m.Close() below, through the driver
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
@@ -63,10 +75,9 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 		_ = driver.Close() // closes the pool too; m does that from here on
 		return 0, 0, fmt.Errorf("migrator: %w", err)
 	}
-	// Replicas started together queue on the advisory lock while one of them migrates: wait as long
-	// as a migration may take, not golang-migrate's default 15 s - an initContainer that gives up
-	// early only restarts and waits again.
-	m.LockTimeout = 5 * time.Minute
+	// golang-migrate's own wait (default 15 s) a little longer than the server's lock_timeout: the
+	// server cancels the waiting query first, so it is never left running behind a returned error.
+	m.LockTimeout = lockWait + 10*time.Second
 	// Closes the source and the connection pool opened above; nothing useful to do with its errors
 	// once the migration itself has a result.
 	defer func() { _, _ = m.Close() }()

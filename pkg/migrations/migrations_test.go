@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/golang-migrate/migrate/v4/database"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -142,5 +145,41 @@ func TestCheckAcceptsANewerSchema(t *testing.T) {
 	}
 	if err := Check(ctx, db); err != nil {
 		t.Fatalf("Check on a newer schema: %v", err)
+	}
+}
+
+// TestUpGivesUpOnAHeldLock: another session holds the migration lock and never lets go (a stuck
+// migrator). Up must fail within lockWait - cancelled by Postgres - and return, not hang in Close.
+func TestUpGivesUpOnAHeldLock(t *testing.T) {
+	db, dsn := testDB(t)
+	ctx := context.Background()
+	var name string
+	if err := db.QueryRow(`SELECT current_database()`).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	id, err := database.GenerateAdvisoryLockId(name, "public", versionTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Close() }()
+	if _, err := holder.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	saved := lockWait
+	lockWait = 2 * time.Second
+	defer func() { lockWait = saved }()
+
+	start := time.Now()
+	_, _, err = Up(ctx, dsn)
+	if err == nil {
+		t.Fatal("Up succeeded while another session held the migration lock")
+	}
+	if took := time.Since(start); took > 20*time.Second {
+		t.Fatalf("Up returned after %s, want about lockWait (2s)", took)
 	}
 }
