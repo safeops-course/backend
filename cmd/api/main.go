@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -36,6 +37,11 @@ import (
 // @description Type "Bearer" followed by a space and JWT token
 
 func main() {
+	// `backend migrate` applies the schema migrations and exits (the migrate initContainer).
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		os.Exit(runMigrate())
+	}
+
 	ctx := context.Background()
 
 	// Initialize OpenTelemetry with Uptrace
