@@ -164,4 +164,27 @@ func TestPostgresStoreDisplayName(t *testing.T) {
 	if _, err := store.createUser(ctx, "cid", "verysecure123", strings.Repeat("x", 65)); !errors.Is(err, errInvalidInput) {
 		t.Fatalf("65 characters: %v, want errInvalidInput", err)
 	}
+	// A NUL character cannot be stored in PostgreSQL text: refused as the client's input (400), not
+	// left to fail in the INSERT (500) - in the display name and in the username.
+	if _, err := store.createUser(ctx, "dan", "verysecure123", "Dan\x00"); !errors.Is(err, errInvalidInput) {
+		t.Fatalf("NUL in display_name: %v, want errInvalidInput", err)
+	}
+	if _, err := store.createUser(ctx, "e\x00ve", "verysecure123", ""); !errors.Is(err, errInvalidInput) {
+		t.Fatalf("NUL in username: %v, want errInvalidInput", err)
+	}
+}
+
+// TestRegisterWithNULIsTheClientsError: through the API a NUL arrives as \u0000 in the JSON.
+func TestRegisterWithNULIsTheClientsError(t *testing.T) {
+	srv := newTestServer(t)
+	for _, body := range []string{
+		`{"username":"fay","password":"verysecure123","display_name":"Fay\u0000"}`,
+		`{"username":"g\u0000us","password":"verysecure123"}`,
+	} {
+		rr := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body)))
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d, want 400", body, rr.Code)
+		}
+	}
 }

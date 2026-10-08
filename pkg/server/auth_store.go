@@ -354,14 +354,27 @@ const maxDisplayNameRunes = 64
 // the client's error (400), not a truncation.
 func normalizeDisplayName(displayName string) (string, error) {
 	trimmed := strings.TrimSpace(displayName)
+	if containsNUL(trimmed) {
+		return "", fmt.Errorf("%w: display_name must not contain a NUL character", errInvalidInput)
+	}
 	if utf8.RuneCountInString(trimmed) > maxDisplayNameRunes {
 		return "", fmt.Errorf("%w: display_name must be at most %d characters", errInvalidInput, maxDisplayNameRunes)
 	}
 	return trimmed, nil
 }
 
+// containsNUL: PostgreSQL text cannot store a NUL character (0x00) - the INSERT would fail and the
+// client's bad input would surface as our 500. Refused here as the client's error instead.
+// (Invalid UTF-8 cannot reach this far: encoding/json replaces it with U+FFFD.)
+func containsNUL(s string) bool {
+	return strings.IndexByte(s, 0) >= 0
+}
+
 func normalizeUsername(username string) (string, error) {
 	trimmed := strings.TrimSpace(username)
+	if containsNUL(trimmed) {
+		return "", fmt.Errorf("%w: username must not contain a NUL character", errInvalidInput)
+	}
 	if len(trimmed) < 3 {
 		return "", fmt.Errorf("%w: username must be at least 3 characters", errInvalidInput)
 	}
