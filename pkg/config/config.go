@@ -80,34 +80,43 @@ func (c Config) Validate() error {
 
 // Parse reads configuration from environment variables and command-line flags.
 func Parse() Config {
+	return parse(flag.CommandLine, os.Args[1:])
+}
+
+// parse is Parse on a given flag set and arguments, so a test can run it more than once. Every
+// Config field must be copied into the result below: a field set only in defaultConfig is silently
+// dropped here - TestParseKeepsEveryEnvironmentSetting fails when one is.
+func parse(fs *flag.FlagSet, args []string) Config {
 	defaults := defaultConfig()
 
-	port := flag.Int("port", defaults.Port, "HTTP listen port")
-	message := flag.String("message", defaults.UIMessage, "UI message rendered on root page")
-	color := flag.String("color", defaults.UIColor, "UI accent color in hex format")
-	version := flag.String("version", defaults.Version, "Application version")
-	commit := flag.String("commit", defaults.Commit, "Git commit hash")
-	commitShort := flag.String("commit-short", defaults.CommitShort, "Short git commit hash")
-	buildDate := flag.String("build-date", defaults.BuildDate, "Build timestamp in RFC3339 format")
-	randomDelay := flag.Int("random-delay", defaults.RandomDelayMax, "Maximum random delay in milliseconds injected per request")
-	randomError := flag.Float64("random-error-rate", defaults.RandomErrorRate, "Probability [0-1] to inject random HTTP 500 errors")
-	configPath := flag.String("config-path", defaults.ConfigPath, "Directory to watch for config changes (ConfigMaps/Secrets)")
-	jwtSecret := flag.String("jwt-secret", defaults.JWTSecret, "Secret for signing JWT tokens")
-	jwtTokenTTLMinutes := flag.Int("jwt-token-ttl-minutes", defaults.JWTTokenTTLMinutes, "JWT token TTL in minutes")
-	databaseURL := flag.String("database-url", defaults.DatabaseURL, "Postgres connection string used for auth store")
-	authDBPath := flag.String("auth-db-path", defaults.AuthDBPath, "Path to local fallback auth user store JSON file")
-	chaosEnabled := flag.Bool("chaos-enabled", defaults.ChaosEnabled, "Expose /panic and readiness/liveness toggles (authenticated)")
-	pprofEnabled := flag.Bool("pprof-enabled", defaults.PprofEnabled, "Serve Go profiling on pprof-addr")
-	pprofAddr := flag.String("pprof-addr", defaults.PprofAddr, "Listen address of the profiling server")
-	delayMaxSeconds := flag.Float64("delay-max-seconds", defaults.DelayMaxSeconds, "Upper bound for /delay/{seconds}")
-	registrationEnabled := flag.Bool("registration-enabled", defaults.RegistrationEnabled, "Allow POST /auth/register")
-	loginAttemptsPerMinute := flag.Int("login-attempts-per-minute", defaults.LoginAttemptsPerMinute, "Login attempts per username per minute (per pod)")
-	registrationsPerMinute := flag.Int("registrations-per-minute", defaults.RegistrationsPerMinute, "Registrations per minute (per pod)")
+	port := fs.Int("port", defaults.Port, "HTTP listen port")
+	message := fs.String("message", defaults.UIMessage, "UI message rendered on root page")
+	color := fs.String("color", defaults.UIColor, "UI accent color in hex format")
+	version := fs.String("version", defaults.Version, "Application version")
+	commit := fs.String("commit", defaults.Commit, "Git commit hash")
+	commitShort := fs.String("commit-short", defaults.CommitShort, "Short git commit hash")
+	buildDate := fs.String("build-date", defaults.BuildDate, "Build timestamp in RFC3339 format")
+	randomDelay := fs.Int("random-delay", defaults.RandomDelayMax, "Maximum random delay in milliseconds injected per request")
+	randomError := fs.Float64("random-error-rate", defaults.RandomErrorRate, "Probability [0-1] to inject random HTTP 500 errors")
+	configPath := fs.String("config-path", defaults.ConfigPath, "Directory to watch for config changes (ConfigMaps/Secrets)")
+	jwtSecret := fs.String("jwt-secret", defaults.JWTSecret, "Secret for signing JWT tokens")
+	jwtTokenTTLMinutes := fs.Int("jwt-token-ttl-minutes", defaults.JWTTokenTTLMinutes, "JWT token TTL in minutes")
+	databaseURL := fs.String("database-url", defaults.DatabaseURL, "Postgres connection string used for auth store")
+	authDBPath := fs.String("auth-db-path", defaults.AuthDBPath, "Path to local fallback auth user store JSON file")
+	chaosEnabled := fs.Bool("chaos-enabled", defaults.ChaosEnabled, "Expose /panic and readiness/liveness toggles (authenticated)")
+	pprofEnabled := fs.Bool("pprof-enabled", defaults.PprofEnabled, "Serve Go profiling on pprof-addr")
+	pprofAddr := fs.String("pprof-addr", defaults.PprofAddr, "Listen address of the profiling server")
+	delayMaxSeconds := fs.Float64("delay-max-seconds", defaults.DelayMaxSeconds, "Upper bound for /delay/{seconds}")
+	registrationEnabled := fs.Bool("registration-enabled", defaults.RegistrationEnabled, "Allow POST /auth/register")
+	loginAttemptsPerMinute := fs.Int("login-attempts-per-minute", defaults.LoginAttemptsPerMinute, "Login attempts per username per minute (per pod)")
+	registrationsPerMinute := fs.Int("registrations-per-minute", defaults.RegistrationsPerMinute, "Registrations per minute (per pod)")
+	featureDisplayName := fs.Bool("feature-display-name", defaults.FeatureDisplayName, "Return the stored display_name in register/login responses")
 
-	flag.Parse()
+	// flag.CommandLine exits on a bad flag by itself (ExitOnError); a test's set gets no bad flags.
+	_ = fs.Parse(args)
 
 	setFlags := map[string]bool{}
-	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 	invalidEnv := envErrorsStillInEffect(defaults.invalidEnv, setFlags)
 
 	cfg := Config{
@@ -133,6 +142,8 @@ func Parse() Config {
 		RegistrationEnabled:    *registrationEnabled,
 		LoginAttemptsPerMinute: *loginAttemptsPerMinute,
 		RegistrationsPerMinute: *registrationsPerMinute,
+
+		FeatureDisplayName: *featureDisplayName,
 
 		invalidEnv: invalidEnv,
 	}
@@ -194,6 +205,7 @@ var flagForEnv = map[string]string{
 	"CHAOS_ENABLED":             "chaos-enabled",
 	"PPROF_ENABLED":             "pprof-enabled",
 	"AUTH_REGISTRATION_ENABLED": "registration-enabled",
+	"FEATURE_DISPLAY_NAME":      "feature-display-name",
 }
 
 // envErrorsStillInEffect drops the invalid environment variables whose flag was given on the
