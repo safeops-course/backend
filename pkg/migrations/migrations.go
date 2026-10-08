@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database"
 	pgxv5 "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
@@ -82,15 +83,17 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 	// once the migration itself has a result.
 	defer func() { _, _ = m.Close() }()
 
-	before, beforeDirty, err := versionOf(m)
-	if err != nil {
-		return 0, 0, err
-	}
 	// A schema newer than this build is the image-rollback case: the next release migrated, then this
 	// release was rolled back. Expand-only migrations mean this code still works on it (Check accepts
 	// it), so there is nothing to apply - and golang-migrate would fail here, because it cannot find
-	// the database's version among this binary's files. A dirty schema is never skipped.
-	if before > RequiredVersion && !beforeDirty {
+	// the database's version among this binary's files. A dirty schema is never skipped. The version
+	// is read under the same advisory lock the migrations take, so a migration of the next release
+	// still running is waited for, not seen half-way.
+	before, newer, err := newerThanThisBuild(driver)
+	if err != nil {
+		return 0, 0, err
+	}
+	if newer {
 		return before, before, nil
 	}
 	// m.Up takes no context: when ctx ends (the caller's deadline), ask it to stop after the current
@@ -121,6 +124,26 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 		return before, after, fmt.Errorf("schema version %d is dirty: a migration failed half-way - fix it by hand, then mark it clean", after)
 	}
 	return before, after, nil
+}
+
+// newerThanThisBuild reads the schema version under the migrations' advisory lock and reports
+// whether it is newer than RequiredVersion and clean - the case in which Up applies nothing.
+func newerThanThisBuild(driver database.Driver) (version uint, newer bool, err error) {
+	if err := driver.Lock(); err != nil {
+		return 0, false, fmt.Errorf("take the migration lock: %w", err)
+	}
+	v, dirty, verr := driver.Version()
+	if uerr := driver.Unlock(); uerr != nil && verr == nil {
+		verr = fmt.Errorf("release the migration lock: %w", uerr)
+	}
+	if verr != nil {
+		return 0, false, fmt.Errorf("read schema version: %w", verr)
+	}
+	if v < 0 { // database.NilVersion: never migrated
+		return 0, false, nil
+	}
+	version = uint(v)
+	return version, version > RequiredVersion && !dirty, nil
 }
 
 // versionOf reads the current version; a database that was never migrated is version 0.
