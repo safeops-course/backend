@@ -58,7 +58,8 @@ jobs:
   # Expand / contract, checked (Chapter 18): the previous release - the base branch - must keep working
   # on the schema this pull request migrates to. That is what makes rolling back the image safe
   # without rolling back the data. Black-box on purpose: build both binaries, migrate with the new
-  # one, run the old one against the result, register and log in through its HTTP API.
+  # one, then run the old one's migrate (its initContainer in a rollback) and the old app against the
+  # result, and register and log in through its HTTP API.
   previous-release:
     name: previous release on this schema (N-1)
     runs-on: ubuntu-latest
@@ -99,6 +100,11 @@ jobs:
 
       - name: Migrate with this pull request
         run: '"${RUNNER_TEMP}/new-backend" migrate'
+
+      # A rollback runs the previous release's migrate initContainer on this schema before its app:
+      # it must succeed (nothing to apply), or every pod of the rollback hangs in Init.
+      - name: The previous release's migrate accepts this schema
+        run: '"${RUNNER_TEMP}/previous-backend" migrate'
 
       - name: The previous release starts, registers and logs in on that schema
         env:

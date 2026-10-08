@@ -183,3 +183,45 @@ func TestUpGivesUpOnAHeldLock(t *testing.T) {
 		t.Fatalf("Up returned after %s, want about lockWait (2s)", took)
 	}
 }
+
+// TestUpOnANewerSchemaChangesNothing: the image-rollback case. The next release migrated past this
+// build's newest file; this build's migrate (the initContainer) must succeed without touching it -
+// golang-migrate alone fails with "no migration found for version N".
+func TestUpOnANewerSchemaChangesNothing(t *testing.T) {
+	db, dsn := testDB(t)
+	ctx := context.Background()
+	if _, _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	const newer = RequiredVersion + 1
+	if _, err := db.Exec(`UPDATE `+versionTable+` SET version = $1`, int64(newer)); err != nil {
+		t.Fatal(err)
+	}
+	before, after, err := Up(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Up on a newer schema: %v", err)
+	}
+	if before != newer || after != newer {
+		t.Fatalf("Up on a newer schema: %d -> %d, want %d -> %d (unchanged)", before, after, newer, newer)
+	}
+	var v int64
+	if err := db.QueryRow(`SELECT version FROM ` + versionTable).Scan(&v); err != nil || v != int64(newer) {
+		t.Fatalf("schema version after Up: %d (%v), want %d", v, err, newer)
+	}
+}
+
+// TestUpOnANewerDirtySchemaFails: a newer schema that is dirty is a failed migration of the next
+// release - never skipped.
+func TestUpOnANewerDirtySchemaFails(t *testing.T) {
+	db, dsn := testDB(t)
+	ctx := context.Background()
+	if _, _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE `+versionTable+` SET version = $1, dirty = true`, int64(RequiredVersion)+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Up(ctx, dsn); err == nil {
+		t.Fatal("Up skipped a dirty newer schema")
+	}
+}
