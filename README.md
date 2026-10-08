@@ -136,6 +136,12 @@ The schema lives in versioned SQL files, `pkg/migrations/sql/NNNN_name.up.sql`, 
   Every migration is compatible with the code of the previous release (expand / contract): add before
   use, stop using before remove. Chapter 18 of the course walks through it.
 - A new file needs `RequiredVersion` raised in `pkg/migrations/migrations.go` - a test fails otherwise.
+- CI proves the rule on every pull request (`previous release on this schema (N-1)` in `pr.yml`): it
+  migrates a database with the pull request's binary, starts the base branch's binary on it, and
+  registers and logs in. A migration that breaks the previous release fails the pull request.
+- Example of an expand step: `0002` adds the optional `display_name` (NULL, no default). The app writes
+  it on register; `FEATURE_DISPLAY_NAME=true` returns it in the register and login responses - the
+  read side is switched separately from the deploy.
 
 The migration tests need a real Postgres (CI starts one); without `TEST_DATABASE_URL` they skip:
 
