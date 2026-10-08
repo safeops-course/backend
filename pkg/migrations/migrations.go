@@ -32,7 +32,7 @@ var files embed.FS
 
 // RequiredVersion is the schema version this build's code needs: the number of its newest
 // migration file. migrations_test.go fails when a new file is added and this is not raised.
-const RequiredVersion uint = 1
+const RequiredVersion uint = 2
 
 // versionTable is golang-migrate's bookkeeping table: one row, the version and a dirty flag.
 const versionTable = "schema_migrations"

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,7 @@ var (
 )
 
 type authUserStore interface {
-	createUser(ctx context.Context, username, password string) (userRecord, error)
+	createUser(ctx context.Context, username, password, displayName string) (userRecord, error)
 	authenticate(ctx context.Context, username, password string) (userRecord, error)
 	Close() error
 }
@@ -44,6 +45,7 @@ type userRecord struct {
 	PasswordHash string    `json:"password_hash"`
 	PasswordSalt string    `json:"password_salt"`
 	CreatedAt    time.Time `json:"created_at"`
+	DisplayName  string    `json:"display_name,omitempty"` // optional; empty when the user set none (schema 2)
 }
 
 type userStoreState struct {
@@ -134,8 +136,12 @@ func (s *fileUserStore) saveLocked() error {
 	return nil
 }
 
-func (s *fileUserStore) createUser(_ context.Context, username, password string) (userRecord, error) {
+func (s *fileUserStore) createUser(_ context.Context, username, password, displayName string) (userRecord, error) {
 	normalizedUsername, err := normalizeUsername(username)
+	if err != nil {
+		return userRecord{}, err
+	}
+	normalizedDisplayName, err := normalizeDisplayName(displayName)
 	if err != nil {
 		return userRecord{}, err
 	}
@@ -162,6 +168,7 @@ func (s *fileUserStore) createUser(_ context.Context, username, password string)
 		PasswordSalt: "",
 		PasswordHash: hashedPassword,
 		CreatedAt:    time.Now().UTC(),
+		DisplayName:  normalizedDisplayName,
 	}
 	s.nextID++
 	s.users[lookupKey] = record
@@ -262,8 +269,12 @@ func (s *postgresUserStore) ensureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *postgresUserStore) createUser(ctx context.Context, username, password string) (userRecord, error) {
+func (s *postgresUserStore) createUser(ctx context.Context, username, password, displayName string) (userRecord, error) {
 	normalizedUsername, err := normalizeUsername(username)
+	if err != nil {
+		return userRecord{}, err
+	}
+	normalizedDisplayName, err := normalizeDisplayName(displayName)
 	if err != nil {
 		return userRecord{}, err
 	}
@@ -280,15 +291,15 @@ func (s *postgresUserStore) createUser(ctx context.Context, username, password s
 	}
 
 	const q = `
-INSERT INTO app_users (username, password_hash, password_salt)
-VALUES ($1, $2, $3)
+INSERT INTO app_users (username, password_hash, password_salt, display_name)
+VALUES ($1, $2, $3, NULLIF($4, ''))
 ON CONFLICT ((lower(username))) DO NOTHING
-RETURNING id, username, password_hash, password_salt, created_at;
+RETURNING id, username, password_hash, password_salt, created_at, COALESCE(display_name, '');
 `
 
 	record := userRecord{}
-	err = s.db.QueryRowContext(ctx, q, normalizedUsername, hashedPassword, "").
-		Scan(&record.ID, &record.Username, &record.PasswordHash, &record.PasswordSalt, &record.CreatedAt)
+	err = s.db.QueryRowContext(ctx, q, normalizedUsername, hashedPassword, "", normalizedDisplayName).
+		Scan(&record.ID, &record.Username, &record.PasswordHash, &record.PasswordSalt, &record.CreatedAt, &record.DisplayName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return userRecord{}, errUserExists
 	}
@@ -309,7 +320,7 @@ func (s *postgresUserStore) authenticate(ctx context.Context, username, password
 	}
 
 	const q = `
-SELECT id, username, password_hash, password_salt, created_at
+SELECT id, username, password_hash, password_salt, created_at, COALESCE(display_name, '')
 FROM app_users
 WHERE lower(username) = lower($1)
 LIMIT 1;
@@ -317,7 +328,7 @@ LIMIT 1;
 
 	record := userRecord{}
 	err = s.db.QueryRowContext(ctx, q, normalizedUsername).
-		Scan(&record.ID, &record.Username, &record.PasswordHash, &record.PasswordSalt, &record.CreatedAt)
+		Scan(&record.ID, &record.Username, &record.PasswordHash, &record.PasswordSalt, &record.CreatedAt, &record.DisplayName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return userRecord{}, errInvalidCredentials
 	}
@@ -334,6 +345,19 @@ LIMIT 1;
 
 func (s *postgresUserStore) Close() error {
 	return s.db.Close()
+}
+
+// maxDisplayNameRunes matches the display_name column (VARCHAR(64), characters, not bytes).
+const maxDisplayNameRunes = 64
+
+// normalizeDisplayName trims the optional display name; empty means none. Longer than the column is
+// the client's error (400), not a truncation.
+func normalizeDisplayName(displayName string) (string, error) {
+	trimmed := strings.TrimSpace(displayName)
+	if utf8.RuneCountInString(trimmed) > maxDisplayNameRunes {
+		return "", fmt.Errorf("%w: display_name must be at most %d characters", errInvalidInput, maxDisplayNameRunes)
+	}
+	return trimmed, nil
 }
 
 func normalizeUsername(username string) (string, error) {
