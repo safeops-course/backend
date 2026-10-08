@@ -1,7 +1,9 @@
 package config
 
 import (
+	"flag"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -98,5 +100,45 @@ func TestValidateRejectsNonFiniteOrHugeDelayMax(t *testing.T) {
 	cfg.DelayMaxSeconds = MaxDelaySeconds
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("DELAY_MAX_SECONDS=%d must be accepted: %v", MaxDelaySeconds, err)
+	}
+}
+
+// Parse used to drop FEATURE_DISPLAY_NAME: defaultConfig read it, but the Config built from the
+// command-line flags did not copy it, so the flag never reached the server - and every server test,
+// which builds its Config directly, passed. Here every exported field gets a non-zero value from its
+// environment variable, and parse must return exactly what defaultConfig read. A new field without a
+// variable below fails the zero-value check, so it cannot be forgotten in parse either.
+func TestParseKeepsEveryEnvironmentSetting(t *testing.T) {
+	for key, value := range map[string]string{
+		"PORT": "9090", "UI_MESSAGE": "hello", "UI_COLOR": "#000000",
+		"APP_VERSION": "v9", "APP_COMMIT": "abcdef1234", "APP_COMMIT_SHORT": "abcdef1", "APP_BUILD_DATE": "2026-01-01",
+		"RANDOM_DELAY_MAX": "5", "RANDOM_ERROR_RATE": "0.5", "CONFIG_PATH": "/config",
+		"JWT_SECRET": strings.Repeat("s", MinJWTSecretLength), "JWT_TOKEN_TTL_MINUTES": "30",
+		"DATABASE_URL": "postgresql://u@db:5432/app", "AUTH_DB_PATH": "/data/users.json",
+		"CHAOS_ENABLED": "true", "PPROF_ENABLED": "true", "PPROF_ADDR": "127.0.0.1:7070", "DELAY_MAX_SECONDS": "3",
+		"AUTH_REGISTRATION_ENABLED": "true", "AUTH_LOGIN_ATTEMPTS_PER_MINUTE": "7", "AUTH_REGISTRATIONS_PER_MINUTE": "8",
+		"FEATURE_DISPLAY_NAME": "true",
+	} {
+		t.Setenv(key, value)
+	}
+	want := defaultConfig()
+	fields := reflect.ValueOf(want)
+	for i := 0; i < fields.NumField(); i++ {
+		if fields.Type().Field(i).IsExported() && fields.Field(i).IsZero() {
+			t.Errorf("%s is zero: give it an environment variable in this test", fields.Type().Field(i).Name)
+		}
+	}
+	got := parse(flag.NewFlagSet("test", flag.ContinueOnError), nil)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parse dropped or changed a setting:\n got  %+v\n want %+v", got, want)
+	}
+}
+
+// A flag overrides its environment variable, the feature flags included.
+func TestFeatureFlagFromTheCommandLine(t *testing.T) {
+	t.Setenv("FEATURE_DISPLAY_NAME", "false")
+	got := parse(flag.NewFlagSet("test", flag.ContinueOnError), []string{"-feature-display-name"})
+	if !got.FeatureDisplayName {
+		t.Fatalf("-feature-display-name did not switch the feature on")
 	}
 }
