@@ -16,34 +16,45 @@ import (
 	"github.com/ldbl/sre/backend/pkg/migrations"
 )
 
-// registerUser posts /auth/register and returns the decoded response.
-func registerUser(t *testing.T, srv *Server, body string) authResponse {
+// postAuth posts body to path, requires the status, and returns the raw response body.
+func postAuth(t *testing.T, srv *Server, path, body string, want int) []byte {
 	t.Helper()
 	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body)))
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("register: %d %s", rr.Code, rr.Body.String())
+	srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	if rr.Code != want {
+		t.Fatalf("%s: %d, want %d", path, rr.Code, want)
 	}
-	var resp authResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	return resp
+	return rr.Body.Bytes()
 }
 
-// loginUser posts /auth/login and returns the decoded response.
-func loginUser(t *testing.T, srv *Server, body string) authResponse {
+// responseUser returns the "user" object of an auth response as raw JSON fields, so a test can tell
+// a missing key from an empty value (the struct's omitempty would hide the difference).
+func responseUser(t *testing.T, raw []byte) map[string]json.RawMessage {
 	t.Helper()
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body)))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("login: %d %s", rr.Code, rr.Body.String())
+	var resp struct {
+		User map[string]json.RawMessage `json:"user"`
 	}
-	var resp authResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatal(err)
 	}
-	return resp
+	if resp.User == nil {
+		t.Fatalf("no user object in the response")
+	}
+	return resp.User
+}
+
+// displayName returns the user's display_name, and whether the key is there at all.
+func displayName(t *testing.T, raw []byte) (string, bool) {
+	t.Helper()
+	field, ok := responseUser(t, raw)["display_name"]
+	if !ok {
+		return "", false
+	}
+	var name string
+	if err := json.Unmarshal(field, &name); err != nil {
+		t.Fatal(err)
+	}
+	return name, true
 }
 
 // The display name is written on register either way; FEATURE_DISPLAY_NAME only decides whether it is
@@ -53,20 +64,37 @@ func TestDisplayNameFollowsTheFeatureFlag(t *testing.T) {
 	register := `{"username":"ana","password":"verysecure123","display_name":"  Ana Petrova "}`
 	login := `{"username":"ana","password":"verysecure123"}`
 
+	// Flag off: the key is absent from the user object - not present and empty.
 	off := newTestServer(t)
-	if got := registerUser(t, off, register).User.DisplayName; got != "" {
-		t.Fatalf("flag off, register: display_name %q in the response, want none", got)
-	}
-	if got := loginUser(t, off, login).User.DisplayName; got != "" {
-		t.Fatalf("flag off, login: display_name %q in the response, want none", got)
+	for _, step := range []struct {
+		path, body string
+		status     int
+	}{
+		{"/auth/register", register, http.StatusCreated},
+		{"/auth/login", login, http.StatusOK},
+	} {
+		raw := postAuth(t, off, step.path, step.body, step.status)
+		if name, present := displayName(t, raw); present {
+			t.Fatalf("flag off, %s: display_name key present (%q), want it absent", step.path, name)
+		}
+		if _, ok := responseUser(t, raw)["username"]; !ok {
+			t.Fatalf("flag off, %s: username missing from the user object", step.path)
+		}
 	}
 
+	// Flag on: the stored, trimmed name - from register, and read back from the store on login.
 	on := newTestServer(t, func(c *config.Config) { c.FeatureDisplayName = true })
-	if got := registerUser(t, on, register).User.DisplayName; got != "Ana Petrova" {
-		t.Fatalf("flag on, register: display_name %q, want %q (trimmed)", got, "Ana Petrova")
-	}
-	if got := loginUser(t, on, login).User.DisplayName; got != "Ana Petrova" {
-		t.Fatalf("flag on, login: display_name %q, want %q (read back from the store)", got, "Ana Petrova")
+	for _, step := range []struct {
+		path, body string
+		status     int
+	}{
+		{"/auth/register", register, http.StatusCreated},
+		{"/auth/login", login, http.StatusOK},
+	} {
+		raw := postAuth(t, on, step.path, step.body, step.status)
+		if name, present := displayName(t, raw); !present || name != "Ana Petrova" {
+			t.Fatalf("flag on, %s: display_name %q (present %v), want %q", step.path, name, present, "Ana Petrova")
+		}
 	}
 }
 
