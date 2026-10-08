@@ -135,7 +135,6 @@ go test ./...       # run tests
 | `DELAY_MAX_SECONDS` | `10` | Upper bound for `/delay/{seconds}` |
 | `AUTH_REGISTRATION_ENABLED` | `true` | Allow `POST /auth/register` |
 | `AUTH_LOGIN_ATTEMPTS_PER_MINUTE` / `AUTH_REGISTRATIONS_PER_MINUTE` | `10` / `10` | In-pod rate limits (per username / per pod) |
-| `FEATURE_DISPLAY_NAME` | `false` | Return the stored `display_name` in register/login responses (schema version 2) |
 | `DEPLOYMENT_ENVIRONMENT` | `""` | `production`/`staging` = JSON logging |
 | `UPTRACE_DSN` | `""` | Uptrace exporter DSN (optional) |
 
