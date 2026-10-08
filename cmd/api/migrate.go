@@ -30,9 +30,12 @@ func runMigrate() int {
 		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
 		return 1
 	}
-	if before == after {
+	switch {
+	case after > migrations.RequiredVersion:
+		fmt.Printf("migrate: schema %d is newer than this build knows (%d) - nothing to apply; this build runs on it (expand-only migrations)\n", after, migrations.RequiredVersion)
+	case before == after:
 		fmt.Printf("migrate: schema already at version %d (this build needs %d)\n", after, migrations.RequiredVersion)
-	} else {
+	default:
 		fmt.Printf("migrate: schema %d -> %d (this build needs %d)\n", before, after, migrations.RequiredVersion)
 	}
 	return 0

@@ -82,9 +82,16 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 	// once the migration itself has a result.
 	defer func() { _, _ = m.Close() }()
 
-	before, _, err = versionOf(m)
+	before, beforeDirty, err := versionOf(m)
 	if err != nil {
 		return 0, 0, err
+	}
+	// A schema newer than this build is the image-rollback case: the next release migrated, then this
+	// release was rolled back. Expand-only migrations mean this code still works on it (Check accepts
+	// it), so there is nothing to apply - and golang-migrate would fail here, because it cannot find
+	// the database's version among this binary's files. A dirty schema is never skipped.
+	if before > RequiredVersion && !beforeDirty {
+		return before, before, nil
 	}
 	// m.Up takes no context: when ctx ends (the caller's deadline), ask it to stop after the current
 	// migration instead. done ends the goroutine when Up returns first.
