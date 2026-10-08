@@ -38,9 +38,6 @@ type Config struct {
 	LoginAttemptsPerMinute int     // Per username, per pod
 	RegistrationsPerMinute int     // For the whole pod
 
-	// Feature flags (FEATURE_*, public in /env). Off by default; an environment overlay switches them.
-	FeatureDisplayName bool // auth responses carry the user's display_name (schema version 2, Chapter 18)
-
 	invalidEnv []string // boolean env vars with a value strconv.ParseBool rejects (reported by Validate)
 }
 
@@ -165,8 +162,6 @@ func defaultConfig() Config {
 		RegistrationEnabled:    envBool("AUTH_REGISTRATION_ENABLED", true, &invalidEnv),
 		LoginAttemptsPerMinute: envInt("AUTH_LOGIN_ATTEMPTS_PER_MINUTE", 10),
 		RegistrationsPerMinute: envInt("AUTH_REGISTRATIONS_PER_MINUTE", 10),
-
-		FeatureDisplayName: envBool("FEATURE_DISPLAY_NAME", false, &invalidEnv),
 	}
 	cfg.invalidEnv = invalidEnv
 	return cfg
