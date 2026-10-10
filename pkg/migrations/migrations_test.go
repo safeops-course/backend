@@ -45,6 +45,10 @@ func TestRequiredVersionIsNewestFile(t *testing.T) {
 // most that long for a table lock, so the running release's queries never queue behind it for longer.
 var lockTimeoutLine = regexp.MustCompile(`^SET LOCAL lock_timeout = '[0-9]+s';$`)
 
+// concurrentIndex is a statement that cannot run in a transaction - the one kind of file without
+// lockTimeoutLine. Matched on the parsed statement, so a comment that mentions it does not count.
+var concurrentIndex = regexp.MustCompile(`(?is)^(CREATE\s+(UNIQUE\s+)?INDEX|DROP\s+INDEX|REINDEX\s+\w+)\s+CONCURRENTLY\b`)
+
 // statements returns a migration file's SQL statements: comment lines dropped, split on ";".
 func statements(body string) []string {
 	var sqlLines []string
@@ -82,7 +86,13 @@ func TestEveryMigrationLimitsItsLockWait(t *testing.T) {
 			t.Errorf("%s: no statements", e.Name())
 			continue
 		}
-		if strings.Contains(strings.ToUpper(string(body)), "CONCURRENTLY") {
+		concurrent := 0
+		for _, stmt := range stmts {
+			if concurrentIndex.MatchString(stmt) {
+				concurrent++
+			}
+		}
+		if concurrent > 0 {
 			if len(stmts) != 1 {
 				t.Errorf("%s: a CONCURRENTLY statement must be the only statement in its file (got %d) - "+
 					"with more, the file runs as a transaction and Postgres refuses it", e.Name(), len(stmts))
