@@ -57,9 +57,14 @@ jobs:
 
   # Expand / contract, checked (Chapter 18): the previous release - the base branch - must keep working
   # on the schema this pull request migrates to. That is what makes rolling back the image safe
-  # without rolling back the data. Black-box on purpose: build both binaries, migrate with the new
-  # one, then run the old one's migrate (its initContainer in a rollback) and the old app against the
-  # result, and register and log in through its HTTP API.
+  # without rolling back the data. Black-box on purpose: build both binaries and drive them through
+  # their HTTP API, in the order a release and its rollback happen:
+  #   1. the previous release migrates and writes a user - data that exists before the migration;
+  #   2. this pull request migrates and writes a user with everything it stores (a display name);
+  #   3. the previous release's migrate (its initContainer in a rollback) accepts that schema, and the
+  #      previous app logs in both users: old data survived, new data is readable by old code.
+  # Limit: "previous" is the base commit - what develop runs before this merge. Production may be
+  # several releases behind; rolling it back further than one release is not checked here.
   previous-release:
     name: previous release on this schema (N-1)
     runs-on: ubuntu-latest
@@ -98,35 +103,58 @@ jobs:
           go build -o "${RUNNER_TEMP}/new-backend" ./cmd/api
           (cd previous && go build -o "${RUNNER_TEMP}/previous-backend" ./cmd/api)
 
-      - name: Migrate with this pull request
-        run: '"${RUNNER_TEMP}/new-backend" migrate'
-
-      # A rollback runs the previous release's migrate initContainer on this schema before its app:
-      # it must succeed (nothing to apply), or every pod of the rollback hangs in Init.
-      - name: The previous release's migrate accepts this schema
-        run: '"${RUNNER_TEMP}/previous-backend" migrate'
-
-      - name: The previous release starts, registers and logs in on that schema
+      - name: Release, then rollback, on one database
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/previous-backend" > "${RUNNER_TEMP}/previous.log" 2>&1 &
-          pid=$!
-          trap 'kill "${pid}" 2>/dev/null || true' EXIT
-          for _ in $(seq 1 30); do
-            curl -sf -o /dev/null http://localhost:8080/readyz && break
-            sleep 1
-          done
-          if ! curl -sf -o /dev/null http://localhost:8080/readyz; then
-            echo "::error::the previous release did not become ready on this schema"; cat "${RUNNER_TEMP}/previous.log"; exit 1
-          fi
-          body='{"username":"nminus1","password":"n-minus-1-password"}'
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "${body}" http://localhost:8080/auth/register)
-          [[ "${code}" == 201 ]] || { echo "::error::previous release: register ${code}, want 201"; cat "${RUNNER_TEMP}/previous.log"; exit 1; }
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "${body}" http://localhost:8080/auth/login)
-          [[ "${code}" == 200 ]] || { echo "::error::previous release: login ${code}, want 200"; cat "${RUNNER_TEMP}/previous.log"; exit 1; }
-          echo "previous release (${BASE_REF}) works on this pull request's schema"
+          pid=""
+          trap '[[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null || true' EXIT
+
+          # serve <previous|new>: start that release's app and wait until it is ready.
+          serve() {
+            "${RUNNER_TEMP}/$1-backend" > "${RUNNER_TEMP}/$1.log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 30); do
+              curl -sf -o /dev/null http://localhost:8080/readyz && return 0
+              sleep 1
+            done
+            echo "::error::the $1 release did not become ready"; cat "${RUNNER_TEMP}/$1.log"; exit 1
+          }
+          # stop: stop the running app and wait until it has exited (the port is free again).
+          stop() { kill "${pid}"; wait "${pid}" 2>/dev/null || true; pid=""; }
+          # call <register|login> <username> <want status> [display name]: one request, checked.
+          call() {
+            local action=$1 user=$2 want=$3 name=${4:-} body code
+            body=$(jq -nc --arg u "${user}" --arg n "${name}" \
+              '{username: $u, password: "n-minus-1-password"} + (if $n == "" then {} else {display_name: $n} end)')
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "${body}" "http://localhost:8080/auth/${action}")
+            if [[ "${code}" != "${want}" ]]; then
+              echo "::error::${action} ${user}: ${code}, want ${want}"; cat "${RUNNER_TEMP}"/*.log; exit 1
+            fi
+            echo "${action} ${user}: ${code}"
+          }
+
+          echo "1. the previous release (${BASE_REF}) migrates and writes"
+          "${RUNNER_TEMP}/previous-backend" migrate
+          serve previous
+          call register written-before 201
+          stop
+
+          echo "2. this pull request migrates and writes"
+          "${RUNNER_TEMP}/new-backend" migrate
+          serve new
+          call register written-by-new 201 "Display Name"
+          call login written-before 200
+          stop
+
+          echo "3. rollback: the previous release's migrate and app on this schema"
+          "${RUNNER_TEMP}/previous-backend" migrate
+          serve previous
+          call login written-before 200
+          call login written-by-new 200
+          stop
+          echo "the previous release (${BASE_REF}) works on this pull request's schema, with data from both"
 
   lint:
     name: lint (golangci-lint + gosec)

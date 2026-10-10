@@ -4,4 +4,6 @@
 -- So rolling back the image after this migration needs no rollback of the data.
 -- The read side is switched on separately (FEATURE_DISPLAY_NAME); a later release may make the
 -- column required - the contract step - once every writer sets it.
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name VARCHAR(64);

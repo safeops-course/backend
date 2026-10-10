@@ -136,12 +136,22 @@ The schema lives in versioned SQL files, `pkg/migrations/sql/NNNN_name.up.sql`, 
   Every migration is compatible with the code of the previous release (expand / contract): add before
   use, stop using before remove. Chapter 18 of the course walks through it.
 - A new file needs `RequiredVersion` raised in `pkg/migrations/migrations.go` - a test fails otherwise.
+- Every file starts with `SET LOCAL lock_timeout = '5s';` - a test fails otherwise. DDL waits for an
+  exclusive lock on its table, and the running release's queries on that table queue behind it; 5 s
+  caps that stall, then the migration fails loudly. A file runs as one transaction (one simple-protocol
+  query), so a failed file changes nothing but leaves its version dirty for a person to check and clear.
+  A statement that cannot run in a transaction (`CREATE INDEX CONCURRENTLY`) needs a file of its own.
+- Queries name their columns - no `SELECT *`: a column added by an expand step must not change what
+  the previous release reads.
 - `backend migrate` on a schema **newer** than the build knows (the image was rolled back after the next
   release migrated) applies nothing and succeeds - the rollback's initContainer must not fail. A newer
   schema that is dirty is never skipped.
-- CI proves the rule on every pull request (`previous release on this schema (N-1)` in `pr.yml`): it
-  migrates a database with the pull request's binary, runs the base branch's `migrate` on it (the
-  rollback's initContainer), starts the base branch's app on it, and registers and logs in. A migration that breaks the previous release fails the pull request.
+- CI proves the rule on every pull request (`previous release on this schema (N-1)` in `pr.yml`): the
+  base branch's binary migrates and registers a user; the pull request's binary migrates and registers
+  one with a display name; then the base branch's `migrate` (the rollback's initContainer) and app run
+  on that schema and log in both. A migration that breaks the previous release fails the pull request.
+  It checks one release back - the base commit, what develop runs - not a production that is several
+  releases behind.
 - Example of an expand step: `0002` adds the optional `display_name` (NULL, no default). The app writes
   it on register; `FEATURE_DISPLAY_NAME=true` returns it in the register and login responses - the
   read side is switched separately from the deploy.
