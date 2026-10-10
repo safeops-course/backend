@@ -13,13 +13,18 @@
 //     such as ALTER TABLE needs an exclusive lock on its table, and while it waits for one, every
 //     query of the running release on that table queues behind it. 5 s caps that stall; the
 //     migration then fails loudly instead of the app hanging.
+//   - Except a CONCURRENTLY statement (CREATE/DROP INDEX CONCURRENTLY): it cannot run in a
+//     transaction, so it is the only statement in its file, without the SET LOCAL line. Its lock
+//     (SHARE UPDATE EXCLUSIVE) does not block reads or writes, so the connection's lock_timeout
+//     (lockWait) bounds its wait without stalling the app. A failed one can leave an INVALID index
+//     behind: drop it (DROP INDEX CONCURRENTLY) before the version is reset.
 //
 // How a file runs: the driver sends the whole file in one Exec with no arguments, which pgx sends as
 // a simple-protocol query, and Postgres runs the statements of one such query as one implicit
 // transaction. A file that fails changes nothing - golang-migrate still leaves its version marked
 // dirty (it sets the flag before running the file), so a person checks the schema and clears it
-// (runbook-rollback-migrations.md). That is also why SET LOCAL lasts exactly one file, and why
-// statements that cannot run in a transaction (CREATE INDEX CONCURRENTLY) need a file of their own.
+// (runbook-rollback-migrations.md). That is also why SET LOCAL lasts exactly one file. A file with a
+// single statement is not a transaction block - which is what lets CONCURRENTLY run alone in one.
 package migrations
 
 import (
