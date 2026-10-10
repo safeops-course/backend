@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +38,36 @@ func TestRequiredVersionIsNewestFile(t *testing.T) {
 	}
 	if uint(newest) != RequiredVersion {
 		t.Fatalf("newest migration is %d, RequiredVersion is %d - raise it with the new file", newest, RequiredVersion)
+	}
+}
+
+// lockTimeoutLine is the first statement of every migration file: its DDL waits at most that long for
+// a table lock, so the running release's queries never queue behind it for longer.
+var lockTimeoutLine = regexp.MustCompile(`^SET LOCAL lock_timeout = '[0-9]+s';$`)
+
+// TestEveryMigrationLimitsItsLockWait: a file without the line would wait for its table lock as long
+// as the connection's lock_timeout (lockWait, minutes) - with every query on that table queued behind.
+func TestEveryMigrationLimitsItsLockWait(t *testing.T) {
+	entries, err := files.ReadDir("sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		body, err := files.ReadFile("sql/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := ""
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "--") {
+				first = line
+				break
+			}
+		}
+		if !lockTimeoutLine.MatchString(first) {
+			t.Errorf("%s: the first statement must be SET LOCAL lock_timeout = '5s'; (got %q)", e.Name(), first)
+		}
 	}
 }
 
@@ -224,4 +255,60 @@ func TestUpOnANewerDirtySchemaFails(t *testing.T) {
 	if _, _, err := Up(ctx, dsn); err == nil {
 		t.Fatal("Up skipped a dirty newer schema")
 	}
+}
+
+// TestUpGivesUpOnABusyTable: the running release holds a lock on app_users (an open transaction that
+// read it) while migration 0002 needs to ALTER it. The migration must give up after its own 5 s
+// lock_timeout - not the connection's lockWait - and, run as one transaction, change nothing: the
+// column is still missing, and the version is left dirty for a person to clear.
+func TestUpGivesUpOnABusyTable(t *testing.T) {
+	db, dsn := testDB(t)
+	ctx := context.Background()
+	if _, _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	// Back to version 1: 0002 is pending again.
+	if _, err := db.Exec(`ALTER TABLE app_users DROP COLUMN display_name`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE ` + versionTable + ` SET version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Rollback() }()
+	if _, err := reader.Exec(`SELECT count(*) FROM app_users`); err != nil { // holds ACCESS SHARE until rollback
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, _, err = Up(ctx, dsn)
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("Up altered a table another transaction was reading")
+	}
+	if took > 30*time.Second {
+		t.Fatalf("Up gave up after %s, want about 5 s (the file's lock_timeout, not lockWait)", took)
+	}
+	_ = reader.Rollback()
+
+	var version int64
+	var dirty bool
+	if err := db.QueryRow(`SELECT version, dirty FROM `+versionTable).Scan(&version, &dirty); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 || !dirty {
+		t.Fatalf("after the failed migration: version %d dirty %t, want 2 dirty", version, dirty)
+	}
+	var hasColumn bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'app_users' AND column_name = 'display_name')`).Scan(&hasColumn); err != nil {
+		t.Fatal(err)
+	}
+	if hasColumn {
+		t.Fatal("the failed migration left display_name behind - it did not run as one transaction")
+	}
+	t.Logf("gave up after %s: %v", took.Round(time.Millisecond), err)
 }

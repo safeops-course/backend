@@ -9,6 +9,17 @@
 //     use, stop using before remove. Then rolling back the image never needs a rollback of the data.
 //   - The app needs at least RequiredVersion and accepts a newer schema: the previous release must
 //     keep running after the next release migrated - that is what makes an image rollback safe.
+//   - Every file starts with `SET LOCAL lock_timeout = '5s';` (migrations_test.go checks it). DDL
+//     such as ALTER TABLE needs an exclusive lock on its table, and while it waits for one, every
+//     query of the running release on that table queues behind it. 5 s caps that stall; the
+//     migration then fails loudly instead of the app hanging.
+//
+// How a file runs: the driver sends the whole file in one Exec with no arguments, which pgx sends as
+// a simple-protocol query, and Postgres runs the statements of one such query as one implicit
+// transaction. A file that fails changes nothing - golang-migrate still leaves its version marked
+// dirty (it sets the flag before running the file), so a person checks the schema and clears it
+// (runbook-rollback-migrations.md). That is also why SET LOCAL lasts exactly one file, and why
+// statements that cannot run in a transaction (CREATE INDEX CONCURRENTLY) need a file of their own.
 package migrations
 
 import (
@@ -39,8 +50,9 @@ const versionTable = "schema_migrations"
 
 // lockWait is how long a migrate run waits for the advisory lock - replicas started together queue on
 // it while one of them migrates. Postgres enforces it (lock_timeout on the connection): the driver
-// waits for the lock with no context of its own, so only the server can cancel that query. A var, so
-// the test can shorten it.
+// waits for the lock with no context of its own, so only the server can cancel that query. Only migrate
+// runs wait on that lock, so a long wait stalls no one else; table locks for DDL get 5 s instead, from
+// each file's own SET LOCAL. A var, so the test can shorten it.
 var lockWait = 5 * time.Minute
 
 // Up applies every migration this binary embeds that the database does not have yet. golang-migrate
@@ -55,8 +67,9 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 	if err != nil {
 		return 0, 0, fmt.Errorf("parse database URL: %w", err)
 	}
-	// lock_timeout cancels a wait for the advisory lock (and for any lock a migration's DDL needs)
-	// on the server - so the waiting query has ended before m.Close() below closes the connection.
+	// lock_timeout cancels a wait for the advisory lock on the server - so the waiting query has ended
+	// before m.Close() below closes the connection. Each migration file lowers it for its own
+	// transaction (SET LOCAL), so its DDL never waits this long for a table.
 	if pgxCfg.RuntimeParams == nil {
 		pgxCfg.RuntimeParams = map[string]string{}
 	}
@@ -121,7 +134,7 @@ func Up(ctx context.Context, databaseURL string) (before, after uint, err error)
 		return before, 0, err
 	}
 	if dirty {
-		return before, after, fmt.Errorf("schema version %d is dirty: a migration failed half-way - fix it by hand, then mark it clean", after)
+		return before, after, fmt.Errorf("schema version %d is dirty: its migration started and did not finish - check the schema, then mark it clean (runbook-rollback-migrations.md)", after)
 	}
 	return before, after, nil
 }
@@ -179,7 +192,7 @@ func Check(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("read %s: %w", versionTable, err)
 	}
 	if dirty {
-		return fmt.Errorf("schema version %d is dirty: a migration failed half-way", version)
+		return fmt.Errorf("schema version %d is dirty: its migration started and did not finish", version)
 	}
 	if version < int64(RequiredVersion) {
 		return fmt.Errorf("schema version %d is older than this build needs (%d): run `backend migrate`", version, RequiredVersion)
