@@ -140,7 +140,10 @@ The schema lives in versioned SQL files, `pkg/migrations/sql/NNNN_name.up.sql`, 
   exclusive lock on its table, and the running release's queries on that table queue behind it; 5 s
   caps that stall, then the migration fails loudly. A file runs as one transaction (one simple-protocol
   query), so a failed file changes nothing but leaves its version dirty for a person to check and clear.
-  A statement that cannot run in a transaction (`CREATE INDEX CONCURRENTLY`) needs a file of its own.
+  The exception: a `CONCURRENTLY` statement (`CREATE/DROP INDEX CONCURRENTLY`) cannot run in a
+  transaction, so it is the only statement in its file, without the `SET LOCAL` line - with it, the file
+  is a transaction and Postgres refuses it. Its lock does not block reads or writes; the connection's
+  5-minute `lock_timeout` bounds the wait. A failed one can leave an `INVALID` index: drop it first.
 - Queries name their columns - no `SELECT *`: a column added by an expand step must not change what
   the previous release reads.
 - `backend migrate` on a schema **newer** than the build knows (the image was rolled back after the next

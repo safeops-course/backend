@@ -41,12 +41,36 @@ func TestRequiredVersionIsNewestFile(t *testing.T) {
 	}
 }
 
-// lockTimeoutLine is the first statement of every migration file: its DDL waits at most that long for
-// a table lock, so the running release's queries never queue behind it for longer.
+// lockTimeoutLine is the first statement of every transactional migration file: its DDL waits at
+// most that long for a table lock, so the running release's queries never queue behind it for longer.
 var lockTimeoutLine = regexp.MustCompile(`^SET LOCAL lock_timeout = '[0-9]+s';$`)
 
-// TestEveryMigrationLimitsItsLockWait: a file without the line would wait for its table lock as long
-// as the connection's lock_timeout (lockWait, minutes) - with every query on that table queued behind.
+// concurrentIndex is a statement that cannot run in a transaction - the one kind of file without
+// lockTimeoutLine. Matched on the parsed statement, so a comment that mentions it does not count.
+var concurrentIndex = regexp.MustCompile(`(?is)^(CREATE\s+(UNIQUE\s+)?INDEX|DROP\s+INDEX|REINDEX\s+\w+)\s+CONCURRENTLY\b`)
+
+// statements returns a migration file's SQL statements: comment lines dropped, split on ";".
+func statements(body string) []string {
+	var sqlLines []string
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+			sqlLines = append(sqlLines, line)
+		}
+	}
+	var out []string
+	for _, stmt := range strings.Split(strings.Join(sqlLines, "\n"), ";") {
+		if stmt = strings.TrimSpace(stmt); stmt != "" {
+			out = append(out, stmt)
+		}
+	}
+	return out
+}
+
+// TestEveryMigrationLimitsItsLockWait: a file runs as one transaction and starts with the SET LOCAL
+// line - without it, its DDL would wait for a table lock as long as the connection's lock_timeout
+// (lockWait, minutes), with every query on that table queued behind. The one exception is a file
+// that cannot run in a transaction: CONCURRENTLY, alone in its file and without the line (a second
+// statement would make the file a transaction, and Postgres refuses CONCURRENTLY inside one).
 func TestEveryMigrationLimitsItsLockWait(t *testing.T) {
 	entries, err := files.ReadDir("sql")
 	if err != nil {
@@ -57,16 +81,26 @@ func TestEveryMigrationLimitsItsLockWait(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		first := ""
-		for _, line := range strings.Split(string(body), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "--") {
-				first = line
-				break
+		stmts := statements(string(body))
+		if len(stmts) == 0 {
+			t.Errorf("%s: no statements", e.Name())
+			continue
+		}
+		concurrent := 0
+		for _, stmt := range stmts {
+			if concurrentIndex.MatchString(stmt) {
+				concurrent++
 			}
 		}
-		if !lockTimeoutLine.MatchString(first) {
-			t.Errorf("%s: the first statement must be SET LOCAL lock_timeout = '5s'; (got %q)", e.Name(), first)
+		if concurrent > 0 {
+			if len(stmts) != 1 {
+				t.Errorf("%s: a CONCURRENTLY statement must be the only statement in its file (got %d) - "+
+					"with more, the file runs as a transaction and Postgres refuses it", e.Name(), len(stmts))
+			}
+			continue
+		}
+		if !lockTimeoutLine.MatchString(stmts[0] + ";") {
+			t.Errorf("%s: the first statement must be SET LOCAL lock_timeout = '5s'; (got %q)", e.Name(), stmts[0])
 		}
 	}
 }
@@ -311,4 +345,22 @@ func TestUpGivesUpOnABusyTable(t *testing.T) {
 		t.Fatal("the failed migration left display_name behind - it did not run as one transaction")
 	}
 	t.Logf("gave up after %s: %v", took.Round(time.Millisecond), err)
+}
+
+// TestConcurrentIndexNeedsAFileOfItsOwn: how the driver sends a file decides what it may contain.
+// One Exec with no arguments is one simple-protocol query; with two statements Postgres runs it as
+// one transaction, and refuses CREATE INDEX CONCURRENTLY inside it. Alone - comments allowed - it runs.
+func TestConcurrentIndexNeedsAFileOfItsOwn(t *testing.T) {
+	db, _ := testDB(t)
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE concurrent_check (id int)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "SET LOCAL lock_timeout = '5s';\nCREATE INDEX CONCURRENTLY concurrent_check_a ON concurrent_check (id);"); err == nil ||
+		!strings.Contains(err.Error(), "cannot run inside a transaction block") {
+		t.Fatalf("CONCURRENTLY after SET LOCAL in one Exec: %v, want 'cannot run inside a transaction block'", err)
+	}
+	if _, err := db.ExecContext(ctx, "-- an index of its own\nCREATE INDEX CONCURRENTLY concurrent_check_b ON concurrent_check (id);"); err != nil {
+		t.Fatalf("CONCURRENTLY alone in one Exec: %v", err)
+	}
 }
