@@ -71,7 +71,7 @@ exposes before adding it there.
 | `DEPLOYMENT_ENVIRONMENT` | | `production`/`staging` = JSON logging |
 | `UPTRACE_DSN` | | Uptrace exporter DSN |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD` | | CloudNativePG credentials |
-| `POSTGRES_HOST` | | Postgres host (e.g. `app-postgres-rw`) |
+| `POSTGRES_HOST` | | Postgres host - a name (e.g. `app-postgres-rw`) or an address, IPv6 with or without `[ ]`; no port (`POSTGRES_PORT`) |
 | `POSTGRES_DB` | `app` | Database name |
 
 Without a database the backend keeps users in a local file (`AUTH_DB_PATH`, default `/tmp/users.json`) - for local development only. Inside Kubernetes (`KUBERNETES_SERVICE_HOST` set) it refuses to start without one: every pod would have its own users. Each replica opens at most 10 connections to Postgres.

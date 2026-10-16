@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"math"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -144,20 +145,30 @@ func TestFeatureFlagFromTheCommandLine(t *testing.T) {
 }
 
 // An IPv6 address in POSTGRES_HOST (a dual-stack cluster) must be bracketed in the DSN, or the driver
-// reads the address's own colons as the port separator.
+// reads the address's own colons as the port separator; one already bracketed must not get a second pair.
 func TestDatabaseURLBracketsAnIPv6Host(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("POSTGRES_USER", "app")
 	t.Setenv("POSTGRES_PASSWORD", "secret") // gitleaks:allow - a test value, not a credential
 	t.Setenv("POSTGRES_PORT", "5432")
-	for host, want := range map[string]string{
-		"app-postgres-rw": "@app-postgres-rw:5432/",
-		"10.43.0.12":      "@10.43.0.12:5432/",
-		"fd00:10:96::12":  "@[fd00:10:96::12]:5432/",
+	t.Setenv("POSTGRES_DB", "app")
+	t.Setenv("POSTGRES_SSLMODE", "disable")
+	for host, wantHost := range map[string]string{
+		"app-postgres-rw":  "app-postgres-rw",
+		"10.43.0.12":       "10.43.0.12",
+		"fd00:10:96::12":   "fd00:10:96::12",
+		"[fd00:10:96::12]": "fd00:10:96::12",
 	} {
 		t.Setenv("POSTGRES_HOST", host)
-		if got := DatabaseURLFromEnv(); !strings.Contains(got, want) {
-			t.Errorf("POSTGRES_HOST=%s: DSN %q does not contain %q", host, got, want)
+		dsn := DatabaseURLFromEnv()
+		u, err := url.Parse(dsn)
+		if err != nil {
+			t.Errorf("POSTGRES_HOST=%s: DSN %q does not parse: %v", host, dsn, err)
+			continue
+		}
+		if u.Hostname() != wantHost || u.Port() != "5432" || u.Path != "/app" {
+			t.Errorf("POSTGRES_HOST=%s: DSN %q gives host %q port %q path %q, want %q 5432 /app",
+				host, dsn, u.Hostname(), u.Port(), u.Path, wantHost)
 		}
 	}
 }
