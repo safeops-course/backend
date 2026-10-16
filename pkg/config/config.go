@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -246,15 +247,15 @@ func envFloat(key string, fallback float64) float64 {
 	return fallback
 }
 
-// buildDatabaseURL returns DATABASE_URL if set, otherwise composes it from
-// POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB.
-// Composing from parts ensures the password is properly URL-encoded.
 // DatabaseURLFromEnv is the Postgres DSN the app would use (DATABASE_URL or POSTGRES_*), for
 // commands that need only the database - `backend migrate`.
 func DatabaseURLFromEnv() string {
 	return buildDatabaseURL()
 }
 
+// buildDatabaseURL returns DATABASE_URL if set, otherwise composes it from
+// POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB.
+// Composing from parts ensures the password is properly URL-encoded and an IPv6 host bracketed.
 func buildDatabaseURL() string {
 	if v := envString("DATABASE_URL", ""); v != "" {
 		return v
@@ -270,9 +271,11 @@ func buildDatabaseURL() string {
 	sslMode := envString("POSTGRES_SSLMODE", "disable")
 
 	u := &url.URL{
-		Scheme:   "postgresql",
-		User:     url.UserPassword(user, pass),
-		Host:     fmt.Sprintf("%s:%s", host, port),
+		Scheme: "postgresql",
+		User:   url.UserPassword(user, pass),
+		// JoinHostPort brackets an IPv6 address ([fd00::1]:5432); brackets already given are dropped
+		// first, so "fd00::1" and "[fd00::1]" give the same DSN.
+		Host:     net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), port),
 		Path:     dbName,
 		RawQuery: fmt.Sprintf("sslmode=%s", sslMode),
 	}
