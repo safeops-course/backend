@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -272,7 +273,7 @@ func buildDatabaseURL() string {
 	u := &url.URL{
 		Scheme:   "postgresql",
 		User:     url.UserPassword(user, pass),
-		Host:     fmt.Sprintf("%s:%s", host, port),
+		Host:     net.JoinHostPort(host, port), // brackets an IPv6 literal: [fd00::1]:5432
 		Path:     dbName,
 		RawQuery: fmt.Sprintf("sslmode=%s", sslMode),
 	}

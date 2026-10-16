@@ -142,3 +142,22 @@ func TestFeatureFlagFromTheCommandLine(t *testing.T) {
 		t.Fatalf("-feature-display-name did not switch the feature on")
 	}
 }
+
+// An IPv6 address in POSTGRES_HOST (a dual-stack cluster) must be bracketed in the DSN, or the driver
+// reads the address's own colons as the port separator.
+func TestDatabaseURLBracketsAnIPv6Host(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("POSTGRES_USER", "app")
+	t.Setenv("POSTGRES_PASSWORD", "secret") // gitleaks:allow - a test value, not a credential
+	t.Setenv("POSTGRES_PORT", "5432")
+	for host, want := range map[string]string{
+		"app-postgres-rw": "@app-postgres-rw:5432/",
+		"10.43.0.12":      "@10.43.0.12:5432/",
+		"fd00:10:96::12":  "@[fd00:10:96::12]:5432/",
+	} {
+		t.Setenv("POSTGRES_HOST", host)
+		if got := DatabaseURLFromEnv(); !strings.Contains(got, want) {
+			t.Errorf("POSTGRES_HOST=%s: DSN %q does not contain %q", host, got, want)
+		}
+	}
+}
